@@ -7,16 +7,20 @@
 *.elf
 *.zip
 *.d
+*.o
+*.e
 *.ihex
 *.pyc
 *~
-obj_*
+build/*
 Makefile.target
 Makefile.*.defines
 tools/doxygen/html
+tools/readthedocs/_build
 patches-*
-tools/tunslip
-tools/tunslip6
+tools/serial-io/tunslip6
+tools/serial-io/serialdump
+serialdump-*
 build
 tools/coffee-manager/build/
 tools/coffee-manager/coffee.jar
@@ -28,9 +32,13 @@ COOJA.testlog
 *.jn516x
 *.native
 *.nrf52dk
-*.openmote-cc2538
+*.nrf52840
+*.openmote
+*.simplelink
 *.sky
-*.srf06-cc26xx
+*.firmware
+*.cc26x0-cc13x0
+*.z1
 *.zoul
 
 # do not ignore platform makefiles
@@ -39,9 +47,10 @@ COOJA.testlog
 !Makefile.jn516x
 !Makefile.native
 !Makefile.nrf52dk
-!Makefile.openmote-cc2538
+!Makefile.nrf52840
+!Makefile.openmote
 !Makefile.sky
-!Makefile.srf06-cc26xx
+!Makefile.cc26x0-cc13x0
 !Makefile.zoul
 
 # other nRF52 build artifacts
@@ -55,7 +64,5 @@ COOJA.testlog
 *.err
 summary
 tests/[0-9][0-9]-*/org/
-
-# x86 UEFI files
-cpu/x86/uefi/Makefile.uefi
-cpu/x86/uefi/edk2
+tests/18-coap-lwm2m/Californium.properties
+tests/18-coap-lwm2m/leshan-server-demo*.jar

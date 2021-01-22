@@ -56,6 +56,7 @@
  * \sa \ref timer "Simple timer library"
  * \sa \ref clock "Clock library" (used by the timer library)
  *
+ * It is \e not safe to manipulate event timers within an interrupt context.
  * @{
  */
 
@@ -94,7 +95,7 @@ struct etimer {
  *             process that called the etimer_set() function.
  *
  */
-CCIF void etimer_set(struct etimer *et, clock_time_t interval);
+void etimer_set(struct etimer *et, clock_time_t interval);
 
 /**
  * \brief      Reset an event timer with the same interval as was
@@ -107,11 +108,12 @@ CCIF void etimer_set(struct etimer *et, clock_time_t interval);
  *             is the exact time that the event timer last
  *             expired. Therefore, this function will cause the timer
  *             to be stable over time, unlike the etimer_restart()
- *             function.
+ *             function. If this is executed before the timer expired,
+ *             this function has no effect.
  *
  * \sa etimer_restart()
  */
-CCIF void etimer_reset(struct etimer *et);
+void etimer_reset(struct etimer *et);
 
 /**
  * \brief      Reset an event timer with a new interval.
@@ -192,7 +194,7 @@ clock_time_t etimer_start_time(struct etimer *et);
  *             This function tests if an event timer has expired and
  *             returns true or false depending on its status.
  */
-CCIF int etimer_expired(struct etimer *et);
+int etimer_expired(struct etimer *et);
 
 /**
  * \brief      Stop a pending event timer.

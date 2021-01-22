@@ -75,7 +75,6 @@ typedef void (req_handler_t)(const linkaddr_t *peer_addr,
 typedef void (res_handler_t)(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
                              const uint8_t *body, size_t body_len);
 
-static void advance_gen(const linkaddr_t *peer_addr);
 static void add_res_sent_callback(void *arg, uint16_t arg_len,
                                   const linkaddr_t *dest_addr,
                                   sixp_output_status_t status);
@@ -146,17 +145,6 @@ static const struct {
 };
 
 static void
-advance_gen(const linkaddr_t *peer_addr)
-{
-  sixp_nbr_t *nbr;
-  assert((nbr = sixp_nbr_find(peer_addr)) != NULL);
-  if(nbr == NULL) {
-    return;
-  }
-  assert(sixp_nbr_advance_gen(nbr) == 0);
-}
-
-static void
 add_res_sent_callback(void *arg, uint16_t arg_len,
                       const linkaddr_t *dest_addr,
                       sixp_output_status_t status)
@@ -168,7 +156,6 @@ add_res_sent_callback(void *arg, uint16_t arg_len,
   } else {
     add_cell(dest_addr, (sf_plugtest_cell_t *)arg, LINK_OPTION_RX);
   }
-  advance_gen(dest_addr);
 }
 
 static void
@@ -182,7 +169,6 @@ delete_res_sent_callback(void *arg, uint16_t arg_len,
     LOG_ERR("error in sending a response\n");
   } else {
     delete_cell(dest_addr, (sf_plugtest_cell_t *)arg);
-    advance_gen(dest_addr);
   }
 }
 
@@ -236,7 +222,7 @@ add_cell(const linkaddr_t *peer_addr, const sf_plugtest_cell_t *cell,
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL ||
      tsch_schedule_add_link(slotframe, link_options, LINK_TYPE_NORMAL,
-                            peer_addr, timeslot, channel_offset) == NULL) {
+                            peer_addr, timeslot, channel_offset, 1) == NULL) {
     LOG_ERR("cannot add a cell\n");
     return -1;
   }
@@ -250,6 +236,7 @@ delete_cell(const linkaddr_t *peer_addr, const sf_plugtest_cell_t *cell)
 {
   struct tsch_slotframe *slotframe;
   uint16_t timeslot;
+  uint16_t channel_offset;
 
   assert(peer_addr != NULL && cell != NULL);
   if(peer_addr == NULL || cell == NULL) {
@@ -257,9 +244,10 @@ delete_cell(const linkaddr_t *peer_addr, const sf_plugtest_cell_t *cell)
   }
 
   timeslot = cell->slot_offset[0] + (cell->slot_offset[1] << 8);
+  channel_offset = cell->channel_offset[0] + (cell->channel_offset[1] << 8);
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL ||
-     tsch_schedule_remove_link_by_timeslot(slotframe, timeslot) == 0) {
+     tsch_schedule_remove_link_by_timeslot(slotframe, timeslot, channel_offset) == 0) {
     LOG_ERR("cannot delete a cell\n");
     return -1;
   }
@@ -306,6 +294,7 @@ add_req_handler(const linkaddr_t *peer_addr,
   sixp_pkt_offset_t cell_list_len;
   static sf_plugtest_cell_t pending_cell;
   uint16_t timeslot;
+  uint16_t channel_offset;
   struct tsch_slotframe *slotframe;
 
 
@@ -314,7 +303,7 @@ add_req_handler(const linkaddr_t *peer_addr,
                   sizeof(sixp_pkt_cell_options_t) +
                   sizeof(sixp_pkt_num_cells_t) +
                   sizeof(sf_plugtest_cell_t))) {
-    LOG_ERR("invalid Add Request length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Add Request length: %lu\n", (unsigned long)body_len);
   }
   assert(
     sixp_pkt_get_cell_options(SIXP_PKT_TYPE_REQUEST,
@@ -332,13 +321,14 @@ add_req_handler(const linkaddr_t *peer_addr,
   assert(cell_list_len == sizeof(sf_plugtest_cell_t));
   memcpy(&pending_cell, cell, sizeof(pending_cell));
   timeslot = pending_cell.slot_offset[0] + (pending_cell.slot_offset[1] << 8);
+  channel_offset = pending_cell.channel_offset[0] + (pending_cell.channel_offset[1] << 8);
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL ||
-     tsch_schedule_get_link_by_timeslot(slotframe, timeslot) != NULL ||
+     tsch_schedule_get_link_by_timeslot(slotframe, timeslot, channel_offset) != NULL ||
      reserve_cell(peer_addr, &pending_cell) < 0) {
     LOG_ERR("Failed to add a cell [slot:%u]\n", timeslot);
     sixp_output(SIXP_PKT_TYPE_RESPONSE,
-                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_NORES,
+                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERR_BUSY,
                 SF_PLUGTEST_SFID, NULL, 0, peer_addr,
                 NULL, NULL, 0);
   } else {
@@ -356,10 +346,11 @@ add_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
   const uint8_t *cell;
   sixp_pkt_offset_t cell_list_len;
   uint16_t timeslot;
+  uint16_t channel_offset;
   struct tsch_slotframe *slotframe;
 
   if(body_len != 4) {
-    LOG_ERR("invalid Add Response length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Add Response length: %lu\n", (unsigned long)body_len);
     return;
   }
 
@@ -367,6 +358,7 @@ add_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
                                 (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_SUCCESS,
                                 &cell, &cell_list_len, body, body_len) == 0);
   timeslot = cell[0] + (cell[1] << 8);
+  channel_offset = cell[2] + (cell[3] << 8);
 
   if(rc != SIXP_PKT_RC_SUCCESS) {
     LOG_ERR("received return code of %u\n", rc);
@@ -374,11 +366,10 @@ add_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
   }
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL ||
-     tsch_schedule_get_link_by_timeslot(slotframe, timeslot) != NULL ||
+     tsch_schedule_get_link_by_timeslot(slotframe, timeslot, channel_offset) != NULL ||
      add_cell(peer_addr, (sf_plugtest_cell_t *)cell, LINK_OPTION_TX) < 0) {
     LOG_ERR("Failed to add a cell [slot:%u]\n", timeslot);
   }
-  advance_gen(peer_addr);
 }
 
 static void
@@ -390,6 +381,7 @@ delete_req_handler(const linkaddr_t *peer_addr,
   sixp_pkt_offset_t cell_list_len;
   static sf_plugtest_cell_t pending_cell;
   uint16_t timeslot;
+  uint16_t channel_offset;
   struct tsch_slotframe *slotframe;
   struct tsch_link *link;
 
@@ -399,7 +391,7 @@ delete_req_handler(const linkaddr_t *peer_addr,
                   sizeof(sixp_pkt_cell_options_t) +
                   sizeof(sixp_pkt_num_cells_t) +
                   sizeof(sf_plugtest_cell_t))) {
-    LOG_ERR("invalid Delete Request length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Delete Request length: %lu\n", (unsigned long)body_len);
   }
   assert(
     sixp_pkt_get_cell_options(SIXP_PKT_TYPE_REQUEST,
@@ -417,13 +409,14 @@ delete_req_handler(const linkaddr_t *peer_addr,
   assert(cell_list_len == sizeof(sf_plugtest_cell_t));
   memcpy(&pending_cell, cell, sizeof(pending_cell));
   timeslot = pending_cell.slot_offset[0] + (pending_cell.slot_offset[1] << 8);
+  channel_offset = pending_cell.channel_offset[0] + (pending_cell.channel_offset[1] << 8);
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL ||
-     (link = tsch_schedule_get_link_by_timeslot(slotframe, timeslot)) == NULL ||
+     (link = tsch_schedule_get_link_by_timeslot(slotframe, timeslot, channel_offset)) == NULL ||
      memcmp(peer_addr, &link->addr, sizeof(linkaddr_t)) != 0) {
     LOG_ERR("Failed to delete a cell [slot:%u]\n", timeslot);
     sixp_output(SIXP_PKT_TYPE_RESPONSE,
-                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_NORES,
+                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERR_BUSY,
                 SF_PLUGTEST_SFID, NULL, 0, peer_addr,
                 NULL, NULL, 0);
   } else {
@@ -444,9 +437,10 @@ delete_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
   sixp_pkt_offset_t cell_list_len;
   sixp_nbr_t *nbr;
   uint16_t timeslot;
+  uint16_t channel_offset;
 
   if(body_len != 4) {
-    LOG_ERR("invalid Delete Response length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Delete Response length: %lu\n", (unsigned long)body_len);
     return;
   }
 
@@ -456,6 +450,7 @@ delete_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
                            (const uint8_t **)&cell, &cell_list_len,
                            body, body_len) == 0);
   timeslot = cell->slot_offset[0] + (cell->slot_offset[1] << 8);
+  channel_offset = cell->channel_offset[0] + (cell->channel_offset[1] << 8);
 
   if((nbr = sixp_nbr_find(peer_addr)) == NULL) {
     LOG_ERR("unexpected error; cannot find nbr\n");
@@ -468,12 +463,11 @@ delete_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
   }
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL ||
-     (link = tsch_schedule_get_link_by_timeslot(slotframe, timeslot)) == NULL ||
+     (link = tsch_schedule_get_link_by_timeslot(slotframe, timeslot, channel_offset)) == NULL ||
      memcmp(peer_addr, &link->addr, sizeof(linkaddr_t)) != 0 ||
      delete_cell(peer_addr, cell) < 0) {
     LOG_ERR("Failed to delete a cell [slot:%u]\n", timeslot);
   }
-  advance_gen(peer_addr);
 }
 
 static void
@@ -489,7 +483,7 @@ count_req_handler(const linkaddr_t *peer_addr,
   assert(peer_addr != NULL && body != NULL);
   if(body_len != (sizeof(sixp_pkt_metadata_t) +
                   sizeof(sixp_pkt_cell_options_t))) {
-    LOG_ERR("invalid Count Request length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Count Request length: %lu\n", (unsigned long)body_len);
   }
   assert(
     sixp_pkt_get_cell_options(SIXP_PKT_TYPE_REQUEST,
@@ -503,7 +497,7 @@ count_req_handler(const linkaddr_t *peer_addr,
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL) {
     sixp_output(SIXP_PKT_TYPE_RESPONSE,
-                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERROR,
+                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERR,
                 SF_PLUGTEST_SFID, NULL, 0, peer_addr,
                 NULL, NULL, 0);
     return;
@@ -534,7 +528,7 @@ count_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
   sixp_pkt_total_num_cells_t total_num_cells;
 
   if(body_len != 2) {
-    LOG_ERR("invalid Count Response length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Count Response length: %lu\n", (unsigned long)body_len);
     return;
   }
 
@@ -570,7 +564,7 @@ list_req_handler(const linkaddr_t *peer_addr,
                   sizeof(sixp_pkt_reserved_t) +
                   sizeof(sixp_pkt_offset_t) +
                   sizeof(sixp_pkt_max_num_cells_t))) {
-    LOG_ERR("invalid List Request length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid List Request length: %lu\n", (unsigned long)body_len);
   }
 
   assert(
@@ -602,7 +596,7 @@ list_req_handler(const linkaddr_t *peer_addr,
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL) {
     sixp_output(SIXP_PKT_TYPE_RESPONSE,
-                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERROR,
+                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERR,
                 SF_PLUGTEST_SFID, NULL, 0, peer_addr,
                 NULL, NULL, 0);
     return;
@@ -679,12 +673,12 @@ clear_req_handler(const linkaddr_t *peer_addr,
 
   assert(peer_addr != NULL && body != NULL);
   if(body_len != sizeof(sixp_pkt_metadata_t)) {
-    LOG_ERR("invalid Clear Request length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Clear Request length: %lu\n", (unsigned long)body_len);
   }
 
   if((slotframe = tsch_schedule_get_slotframe_by_handle(0)) == NULL) {
     sixp_output(SIXP_PKT_TYPE_RESPONSE,
-                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERROR,
+                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_ERR,
                 SF_PLUGTEST_SFID, NULL, 0, peer_addr,
                 NULL, NULL, 0);
     return;
@@ -717,7 +711,7 @@ clear_res_handler(const linkaddr_t *peer_addr, sixp_pkt_rc_t rc,
   }
 
   if(body_len != 0) {
-    LOG_ERR("invalid Clear Response length: %u\n", (unsigned int)body_len);
+    LOG_ERR("invalid Clear Response length: %lu\n", (unsigned long)body_len);
     return;
   }
 
@@ -900,7 +894,7 @@ parse_args(shell_output_func output,
       SHELL_OUTPUT(output, "time source is not available\n");
       return -1;
     } else {
-      memcpy(&(subcmd_args->peer_addr), &(time_source->addr),
+      memcpy(&(subcmd_args->peer_addr), tsch_queue_get_nbr_address(time_source),
              sizeof(linkaddr_t));
     }
   }
@@ -1005,5 +999,6 @@ const sixtop_sf_t sf_plugtest = {
   SF_PLUGTEST_TIMEOUT,
   init,
   input,
-  timeout
+  timeout,
+  NULL
 };

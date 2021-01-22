@@ -46,12 +46,13 @@
 #include "contiki-net.h"
 #include "dev/leds.h"
 #include "reg.h"
-#include "spi-arch.h"
+#include "dev/spi-arch-legacy.h"
 #include "dev/ioc.h"
 #include "dev/sys-ctrl.h"
-#include "dev/spi.h"
+#include "dev/spi-legacy.h"
 #include "dev/ssi.h"
 #include "dev/gpio.h"
+#include "dev/gpio-hal.h"
 #include <stdio.h>
 /*---------------------------------------------------------------------------*/
 #define CC1200_SPI_CLK_PORT_BASE   GPIO_PORT_TO_BASE(SPI0_CLK_PORT)
@@ -75,24 +76,14 @@
 /*---------------------------------------------------------------------------*/
 #if DEBUG_CC1200_ARCH > 0
 #define PRINTF(...) printf(__VA_ARGS__)
-#define BUSYWAIT_UNTIL(cond, max_time)                                  \
-  do {                                                                  \
-    rtimer_clock_t t0;                                                  \
-    t0 = RTIMER_NOW();                                                  \
-    while(!(cond) && RTIMER_CLOCK_LT(RTIMER_NOW(), t0 + (max_time))) {} \
-    if(!(RTIMER_CLOCK_LT(RTIMER_NOW(), t0 + (max_time)))) { \
-      printf("ARCH: Timeout exceeded in line %d!\n", __LINE__); \
-    } \
-  } while(0)
 #else
 #define PRINTF(...)
-#define BUSYWAIT_UNTIL(cond, max_time) while(!cond)
 #endif
 /*---------------------------------------------------------------------------*/
 extern int cc1200_rx_interrupt(void);
 /*---------------------------------------------------------------------------*/
 void
-cc1200_int_handler(uint8_t port, uint8_t pin)
+cc1200_int_handler(gpio_hal_pin_mask_t pin_mask)
 {
   /* To keep the gpio_register_callback happy */
   cc1200_rx_interrupt();
@@ -104,7 +95,7 @@ cc1200_arch_spi_select(void)
   /* Set CSn to low (0) */
   GPIO_CLR_PIN(CC1200_SPI_CSN_PORT_BASE, CC1200_SPI_CSN_PIN_MASK);
   /* The MISO pin should go low before chip is fully enabled. */
-  BUSYWAIT_UNTIL(
+  RTIMER_BUSYWAIT_UNTIL(
     GPIO_READ_PIN(CC1200_SPI_MISO_PORT_BASE, CC1200_SPI_MISO_PIN_MASK) == 0,
     RTIMER_SECOND / 100);
 }
@@ -166,6 +157,14 @@ cc1200_arch_spi_rw(uint8_t *inbuf, const uint8_t *write_buf, uint16_t len)
   return 0;
 }
 /*---------------------------------------------------------------------------*/
+static gpio_hal_event_handler_t interrupt_handler = {
+  .next = NULL,
+  .handler = cc1200_int_handler,
+  .pin_mask =
+    (gpio_hal_pin_to_mask(CC1200_GDO0_PIN) << (CC1200_GDO0_PORT << 3)) |
+    (gpio_hal_pin_to_mask(CC1200_GDO2_PIN) << (CC1200_GDO2_PORT << 3))
+};
+/*---------------------------------------------------------------------------*/
 void
 cc1200_arch_gpio0_setup_irq(int rising)
 {
@@ -184,8 +183,7 @@ cc1200_arch_gpio0_setup_irq(int rising)
   GPIO_ENABLE_INTERRUPT(CC1200_GDO0_PORT_BASE, CC1200_GDO0_PIN_MASK);
   ioc_set_over(CC1200_GDO0_PORT, CC1200_GDO0_PIN, IOC_OVERRIDE_PUE);
   NVIC_EnableIRQ(CC1200_GPIOx_VECTOR);
-  gpio_register_callback(cc1200_int_handler, CC1200_GDO0_PORT,
-                         CC1200_GDO0_PIN);
+  gpio_hal_register_handler(&interrupt_handler);
 }
 /*---------------------------------------------------------------------------*/
 void
@@ -206,8 +204,7 @@ cc1200_arch_gpio2_setup_irq(int rising)
   GPIO_ENABLE_INTERRUPT(CC1200_GDO2_PORT_BASE, CC1200_GDO2_PIN_MASK);
   ioc_set_over(CC1200_GDO2_PORT, CC1200_GDO2_PIN, IOC_OVERRIDE_PUE);
   NVIC_EnableIRQ(CC1200_GPIOx_VECTOR);
-  gpio_register_callback(cc1200_int_handler, CC1200_GDO2_PORT,
-                         CC1200_GDO2_PIN);
+  gpio_hal_register_handler(&interrupt_handler);
 }
 /*---------------------------------------------------------------------------*/
 void
@@ -281,7 +278,7 @@ cc1200_arch_init(void)
   cc1200_arch_spi_deselect();
 
   /* Ensure MISO is high */
-  BUSYWAIT_UNTIL(
+  RTIMER_BUSYWAIT_UNTIL(
     GPIO_READ_PIN(CC1200_SPI_MISO_PORT_BASE, CC1200_SPI_MISO_PIN_MASK),
     RTIMER_SECOND / 10);
 }
@@ -290,4 +287,3 @@ cc1200_arch_init(void)
  * @}
  * @}
  */
-

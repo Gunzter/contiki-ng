@@ -49,6 +49,8 @@
 #include "contiki.h"
 #include "net/ipv6/uip-udp-packet.h"
 #include "net/ipv6/uiplib.h"
+#include "net/ipv6/uip.h" /*ipaddr comparison*/
+#include "net/routing/routing.h"
 #include "coap.h"
 #include "coap-engine.h"
 #include "coap-endpoint.h"
@@ -57,10 +59,6 @@
 #include "coap-constants.h"
 #include "coap-keystore.h"
 #include "coap-keystore-simple.h"
-
-#if UIP_CONF_IPV6_RPL
-#include "rpl.h"
-#endif /* UIP_CONF_IPV6_RPL */
 
 /* Log configuration */
 #include "coap-log.h"
@@ -73,20 +71,12 @@
 #endif /* WITH_DTLS */
 
 /* sanity check for configured values */
-#if COAP_MAX_PACKET_SIZE > (UIP_BUFSIZE - UIP_LLH_LEN - UIP_IPH_LEN - UIP_UDPH_LEN)
+#if COAP_MAX_PACKET_SIZE > (UIP_BUFSIZE - UIP_IPH_LEN - UIP_UDPH_LEN)
 #error "UIP_CONF_BUFFER_SIZE too small for COAP_MAX_CHUNK_SIZE"
 #endif
 
 #define SERVER_LISTEN_PORT        UIP_HTONS(COAP_DEFAULT_PORT)
 #define SERVER_LISTEN_SECURE_PORT UIP_HTONS(COAP_DEFAULT_SECURE_PORT)
-
-/* direct access into the buffer */
-#define UIP_IP_BUF   ((struct uip_ip_hdr *)&uip_buf[UIP_LLH_LEN])
-#if NETSTACK_CONF_WITH_IPV6
-#define UIP_UDP_BUF  ((struct uip_udp_hdr *)&uip_buf[uip_l2_l3_hdr_len])
-#else
-#define UIP_UDP_BUF  ((struct uip_udp_hdr *)&uip_buf[UIP_LLH_LEN + UIP_IPH_LEN])
-#endif
 
 #ifdef WITH_DTLS
 static dtls_handler_t cb;
@@ -99,7 +89,25 @@ static struct uip_udp_conn *dtls_conn = NULL;
 PROCESS(coap_engine, "CoAP Engine");
 
 static struct uip_udp_conn *udp_conn = NULL;
-
+#ifdef WITH_GROUPCOM
+static coap_message_t request[1]; /*TODO enable multiple message processing*/
+static coap_message_t response[1];
+static coap_status_t parse_status; /*TODO enable multiple message processing*/
+static uint8_t *verify_result;
+static uint8_t is_mcast = 0;
+/*TODO change checking srcaddr into checking the dst group addr.*/
+#define is_addr_mcast_group(a)		\
+  ((((a)->u8[0]) == 0xfd) &&            \
+   (((a)->u8[1]) == 0x00) &&            \
+   (((a)->u16[1]) == 0) &&              \
+   (((a)->u16[2]) == 0) &&              \
+   (((a)->u16[3]) == 0) &&              \
+   (((a)->u16[4]) == 0) &&              \
+   (((a)->u16[5]) == 0) &&              \
+   (((a)->u16[6]) == 0) &&              \
+   (((a)->u8[14]) == 0) &&              \
+   (((a)->u8[15]) == 0x01))
+#endif /*WITH_GROUPCOM*/
 /*---------------------------------------------------------------------------*/
 void
 coap_endpoint_log(const coap_endpoint_t *ep)
@@ -214,30 +222,27 @@ coap_endpoint_parse(const char *text, size_t size, coap_endpoint_t *ep)
   /* Only IPv6 supported */
   int start = index_of(text, 0, size, '[');
   int end = index_of(text, start, size, ']');
-  int secure = strncmp((const char *)text, "coaps:", 6) == 0;
   uint32_t port;
-  if(start > 0 && end > start &&
-     uiplib_ipaddrconv((const char *)&text[start], &ep->ipaddr)) {
+
+  ep->secure = strncmp(text, "coaps:", 6) == 0;
+  if(start >= 0 && end > start &&
+     uiplib_ipaddrconv(&text[start], &ep->ipaddr)) {
     if(text[end + 1] == ':' &&
        get_port(text + end + 2, size - end - 2, &port)) {
       ep->port = UIP_HTONS(port);
-    } else if(secure) {
-      /**
-       * Secure CoAP should use a different port but for now
-       * the same port is used.
-       */
-      LOG_DBG("Using secure port (coaps)\n");
+    } else if(ep->secure) {
+      /* Use secure CoAP port by default for secure endpoints. */
       ep->port = SERVER_LISTEN_SECURE_PORT;
-      ep->secure = 1;
     } else {
       ep->port = SERVER_LISTEN_PORT;
-      ep->secure = 0;
     }
     return 1;
-  } else {
-    if(uiplib_ipaddrconv((const char *)&text, &ep->ipaddr)) {
+  } else if(size < UIPLIB_IPV6_MAX_STR_LEN) {
+    char buf[UIPLIB_IPV6_MAX_STR_LEN];
+    memcpy(buf, text, size);
+    buf[size] = '\0';
+    if(uiplib_ipaddrconv(buf, &ep->ipaddr)) {
       ep->port = SERVER_LISTEN_PORT;
-      ep->secure = 0;
       return 1;
     }
   }
@@ -263,13 +268,14 @@ coap_endpoint_is_secure(const coap_endpoint_t *ep)
 int
 coap_endpoint_is_connected(const coap_endpoint_t *ep)
 {
-#if UIP_CONF_IPV6_RPL
 #ifndef CONTIKI_TARGET_NATIVE
-  if(rpl_get_any_dag() == NULL) {
+  printf("is link local %d\n", uip_is_addr_linklocal(&ep->ipaddr));
+  printf("is reachable %d\n", NETSTACK_ROUTING.node_is_reachable());
+  if(!uip_is_addr_linklocal(&ep->ipaddr)
+    && NETSTACK_ROUTING.node_is_reachable() == 0) {
     return 0;
   }
 #endif
-#endif /* UIP_CONF_IPV6_RPL */
 
 #ifdef WITH_DTLS
   if(ep != NULL && ep->secure != 0) {
@@ -359,8 +365,8 @@ process_secure_data(void)
 {
   LOG_INFO("receiving secure UDP datagram from [");
   LOG_INFO_6ADDR(&UIP_IP_BUF->srcipaddr);
-  LOG_INFO_("]:%u\n  Length: %u\n", uip_ntohs(UIP_UDP_BUF->srcport),
-            uip_datalen());
+  LOG_INFO_("]:%u\n", uip_ntohs(UIP_UDP_BUF->srcport));
+  LOG_INFO("  Length: %u\n", uip_datalen());
 
   if(dtls_context) {
     dtls_handle_message(dtls_context, (coap_endpoint_t *)get_src_endpoint(1),
@@ -374,12 +380,33 @@ process_data(void)
 {
   LOG_INFO("receiving UDP datagram from [");
   LOG_INFO_6ADDR(&UIP_IP_BUF->srcipaddr);
-  LOG_INFO_("]:%u\n  Length: %u\n", uip_ntohs(UIP_UDP_BUF->srcport),
-            uip_datalen());
-
-  coap_receive(get_src_endpoint(0), uip_appdata, uip_datalen());
+  LOG_INFO_("]:%u\n", uip_ntohs(UIP_UDP_BUF->srcport));
+  LOG_INFO("  Length: %u\n", uip_datalen());
+#ifdef WITH_GROUPCOM
+  is_mcast = is_addr_mcast_group(&UIP_IP_BUF->srcipaddr);
+  LOG_INFO("is_mcast: %d\n", is_mcast);
+  parse_status = coap_receive(uip_appdata, uip_datalen(), request);
+#else
+  coap_receive(get_src_endpoint(0), uip_appdata, uip_datalen(), 0);
+#endif /*WITH_GROUCPOM*/
+}
+#ifdef WITH_GROUPCOM
+/*---------------------------------------------------------------------------*/
+static void
+process_data_cont(uint8_t verify_res)
+{
+	LOG_INFO("signature verification yielded. Calling the receive continuation\n");
+	coap_receive_cont(get_src_endpoint(0), uip_appdata, uip_datalen(), is_mcast, verify_res, parse_status, request, response);
 }
 /*---------------------------------------------------------------------------*/
+static void 
+schedule_send_response(void)
+{
+	LOG_INFO("signing completed. Continue the CoAP sending process.\n");
+	coap_send_postcrypto(request, response);
+}
+/*---------------------------------------------------------------------------*/
+#endif
 int
 coap_sendto(const coap_endpoint_t *ep, const uint8_t *data, uint16_t length)
 {
@@ -415,11 +442,8 @@ coap_sendto(const coap_endpoint_t *ep, const uint8_t *data, uint16_t length)
     }
   }
 #endif /* WITH_DTLS */
-
+  
   uip_udp_packet_sendto(udp_conn, data, length, &ep->ipaddr, ep->port);
-  LOG_INFO("sent to ");
-  LOG_INFO_COAP_EP(ep);
-  LOG_INFO_(" %u bytes\n", length);
   return length;
 }
 /*---------------------------------------------------------------------------*/
@@ -431,7 +455,6 @@ PROCESS_THREAD(coap_engine, ev, data)
   udp_conn = udp_new(NULL, 0, NULL);
   udp_bind(udp_conn, SERVER_LISTEN_PORT);
   LOG_INFO("Listening on port %u\n", uip_ntohs(udp_conn->lport));
-
 #ifdef WITH_DTLS
   /* create new context with app-data */
   dtls_conn = udp_new(NULL, 0, NULL);
@@ -449,7 +472,6 @@ PROCESS_THREAD(coap_engine, ev, data)
 
   while(1) {
     PROCESS_YIELD();
-
     if(ev == tcpip_event) {
       if(uip_newdata()) {
 #ifdef WITH_DTLS
@@ -461,6 +483,17 @@ PROCESS_THREAD(coap_engine, ev, data)
         process_data();
       }
     }
+#ifdef WITH_GROUPCOM
+    else if(ev == pe_message_verified) {
+	    verify_result = (uint8_t *) data;
+	    LOG_INFO("Received message verified event! Verify result: %d\n", *verify_result);
+	    process_data_cont(*verify_result);
+	    verify_result = NULL;
+    } else if(ev == pe_message_signed) {
+	    LOG_INFO("Received message signed event!\n");
+	    schedule_send_response();
+    }
+#endif /* WITH_GROUPCOM */
   } /* while (1) */
 
   PROCESS_END();
@@ -494,7 +527,7 @@ input_from_peer(struct dtls_context_t *ctx,
   /* Ensure that the endpoint is tagged as secure */
   session->secure = 1;
 
-  coap_receive(session, data, len);
+  coap_receive(session, data, len, 0);
 
   return 0;
 }
@@ -507,7 +540,7 @@ output_to_peer(struct dtls_context_t *ctx,
   struct uip_udp_conn *udp_connection = dtls_get_app_data(ctx);
   LOG_DBG("output_to DTLS peer [");
   LOG_DBG_6ADDR(&session->ipaddr);
-  LOG_DBG_("]:%u %d bytes\n", uip_ntohs(session->port), (int)len);
+  LOG_DBG_("]:%u %ld bytes\n", uip_ntohs(session->port), (long)len);
   uip_udp_packet_sendto(udp_connection, data, len,
                         &session->ipaddr, session->port);
   return len;

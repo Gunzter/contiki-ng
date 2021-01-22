@@ -54,15 +54,62 @@
 #define RTIMER_H_
 
 #include "contiki.h"
+#include "dev/watchdog.h"
+#include <stdbool.h>
 
-#ifndef RTIMER_CLOCK_DIFF
-typedef unsigned short rtimer_clock_t;
-#define RTIMER_CLOCK_DIFF(a,b)     ((signed short)((a)-(b)))
-#endif /* RTIMER_CLOCK_DIFF */
+/*---------------------------------------------------------------------------*/
 
+/** \brief The rtimer size (in bytes) */
+#ifdef RTIMER_CONF_CLOCK_SIZE
+#define RTIMER_CLOCK_SIZE RTIMER_CONF_CLOCK_SIZE
+#else /* RTIMER_CONF_CLOCK_SIZE */
+/* Default: 32bit rtimer*/
+#define RTIMER_CLOCK_SIZE 4
+#endif /* RTIMER_CONF_CLOCK_SIZE */
+
+#if RTIMER_CLOCK_SIZE == 2
+/* 16-bit rtimer */
+typedef uint16_t rtimer_clock_t;
+#define RTIMER_CLOCK_DIFF(a,b)     ((int16_t)((a)-(b)))
+
+#elif RTIMER_CLOCK_SIZE == 4
+/* 32-bit rtimer */
+typedef uint32_t rtimer_clock_t;
+#define RTIMER_CLOCK_DIFF(a, b)    ((int32_t)((a) - (b)))
+
+#elif RTIMER_CLOCK_SIZE == 8
+/* 64-bit rtimer */
+typedef uint64_t rtimer_clock_t;
+#define RTIMER_CLOCK_DIFF(a,b)     ((int64_t)((a)-(b)))
+
+#else
+#error Unsupported rtimer size (check RTIMER_CLOCK_SIZE)
+#endif
+
+#define RTIMER_CLOCK_MAX           ((rtimer_clock_t)-1)
 #define RTIMER_CLOCK_LT(a, b)      (RTIMER_CLOCK_DIFF((a),(b)) < 0)
 
 #include "rtimer-arch.h"
+
+
+/*
+ * RTIMER_GUARD_TIME is the minimum amount of rtimer ticks between
+ * the current time and the future time when a rtimer is scheduled.
+ * Necessary to avoid accidentally scheduling a rtimer in the past
+ * on platforms with fast rtimer ticks. Should be >= 2.
+ */
+#ifdef RTIMER_CONF_GUARD_TIME
+#define RTIMER_GUARD_TIME RTIMER_CONF_GUARD_TIME
+#else /* RTIMER_CONF_GUARD_TIME */
+#define RTIMER_GUARD_TIME (RTIMER_ARCH_SECOND >> 14)
+#endif /* RTIMER_CONF_GUARD_TIME */
+
+/*---------------------------------------------------------------------------*/
+
+/**
+ * Number of rtimer ticks for 1 second.
+ */
+#define RTIMER_SECOND RTIMER_ARCH_SECOND
 
 /**
  * \brief      Initialize the real-time scheduler.
@@ -89,8 +136,11 @@ struct rtimer {
   void *ptr;
 };
 
+/**
+ * TODO: we need to document meanings of these symbols.
+ */
 enum {
-  RTIMER_OK,
+  RTIMER_OK, /**< rtimer task is scheduled successfully */
   RTIMER_ERR_FULL,
   RTIMER_ERR_TIME,
   RTIMER_ERR_ALREADY_SCHEDULED,
@@ -98,13 +148,13 @@ enum {
 
 /**
  * \brief      Post a real-time task.
- * \param task A pointer to the task variable previously declared with RTIMER_TASK().
+ * \param task A pointer to the task variable allocated somewhere.
  * \param time The time when the task is to be executed.
  * \param duration Unused argument.
  * \param func A function to be called when the task is executed.
  * \param ptr An opaque pointer that will be supplied as an argument to the callback function.
- * \return     Non-zero (true) if the task could be scheduled, zero
- *             (false) if the task could not be scheduled.
+ * \return     RTIMER_OK if the task could be scheduled. Any other value indicates
+ *             the task could not be scheduled.
  *
  *             This function schedules a real-time task at a specified
  *             time in the future.
@@ -147,21 +197,64 @@ void rtimer_run_next(void);
  */
 #define RTIMER_TIME(task) ((task)->time)
 
+/** \brief Busy-wait until a condition. Start time is t0, max wait time is max_time */
+#ifndef RTIMER_BUSYWAIT_UNTIL_ABS
+#define RTIMER_BUSYWAIT_UNTIL_ABS(cond, t0, max_time) \
+  ({                                                                \
+    bool c;                                                         \
+    while(!(c = cond) && RTIMER_CLOCK_LT(RTIMER_NOW(), (t0) + (max_time))); \
+    c;                                                              \
+  })
+#endif /* RTIMER_BUSYWAIT_UNTIL_ABS */
+
+/** \brief Busy-wait until a condition for at most max_time */
+#define RTIMER_BUSYWAIT_UNTIL(cond, max_time)       \
+  ({                                                \
+    rtimer_clock_t t0 = RTIMER_NOW();               \
+    RTIMER_BUSYWAIT_UNTIL_ABS(cond, t0, max_time);  \
+  })
+
+/** \brief Busy-wait for a fixed duration */
+#define RTIMER_BUSYWAIT(duration) RTIMER_BUSYWAIT_UNTIL(0, duration)
+
+/*---------------------------------------------------------------------------*/
+
+/**
+ * \name Architecture-dependent symbols
+ *
+ * The functions declared in this section must be defined in
+ * architecture-dependent implementation of rtimer. Alternatively,
+ * they can be defined as macros in rtimer-arch.h.
+ *
+ * In addition, the architecture-dependent header (rtimer-arch.h)
+ * must define the following macros.
+ *
+ * - RTIMER_ARCH_SECOND
+ * - US_TO_RTIMERTICKS(us)
+ * - RTIMERTICKS_TO_US(t)
+ * - RTIMERTICKS_TO_US_64(t)
+ *
+ * @{
+ */
+
+/**
+ * Initialized the architecture-dependent part of rtimer.
+ */
 void rtimer_arch_init(void);
+
+/**
+ * Schedule the call to `rtimer_run_next` at the time t.
+ */
 void rtimer_arch_schedule(rtimer_clock_t t);
-/*rtimer_clock_t rtimer_arch_now(void);*/
 
-#define RTIMER_SECOND RTIMER_ARCH_SECOND
+/*
+ * Return the current time in rtimer ticks.
+ *
+ * Currently rtimer_arch_now() needs to be defined in rtimer-arch.h
+ */
+/* rtimer_clock_t rtimer_arch_now(void); */
 
-/* RTIMER_GUARD_TIME is the minimum amount of rtimer ticks between
-   the current time and the future time when a rtimer is scheduled.
-   Necessary to avoid accidentally scheduling a rtimer in the past
-   on platforms with fast rtimer ticks. Should be >= 2. */
-#ifdef RTIMER_CONF_GUARD_TIME
-#define RTIMER_GUARD_TIME RTIMER_CONF_GUARD_TIME
-#else /* RTIMER_CONF_GUARD_TIME */
-#define RTIMER_GUARD_TIME (RTIMER_ARCH_SECOND >> 14)
-#endif /* RTIMER_CONF_GUARD_TIME */
+/** @} */
 
 #endif /* RTIMER_H_ */
 

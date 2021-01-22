@@ -36,11 +36,16 @@
 /*---------------------------------------------------------------------------*/
 #define RTIMER_ARCH_SECOND 32768
 /*---------------------------------------------------------------------------*/
+#define CC2538_PHY_OVERHEAD          3
+#define CC2538_BYTE_AIR_TIME         32
 /* 352us from calling transmit() until the SFD byte has been sent */
-#define RADIO_DELAY_BEFORE_TX     ((unsigned)US_TO_RTIMERTICKS(352))
+#define CC2538_DELAY_BEFORE_TX       ((unsigned)US_TO_RTIMERTICKS(352))
 /* 192us as in datasheet but ACKs are not always received, so adjusted to 250us */
-#define RADIO_DELAY_BEFORE_RX     ((unsigned)US_TO_RTIMERTICKS(250))
-#define RADIO_DELAY_BEFORE_DETECT 0
+#define CC2538_DELAY_BEFORE_RX       ((unsigned)US_TO_RTIMERTICKS(250))
+#define CC2538_DELAY_BEFORE_DETECT   0
+/* Frame filtering done in software */
+#define TSCH_CONF_HW_FRAME_FILTERING  0
+
 #ifndef TSCH_CONF_BASE_DRIFT_PPM
 /* The drift compared to "true" 10ms slots.
  * Enable adaptive sync to enable compensation for this.
@@ -54,16 +59,20 @@
 #define TSCH_CONF_BASE_DRIFT_PPM -977
 #endif
 
-#if MAC_CONF_WITH_TSCH
-#define TSCH_CONF_HW_FRAME_FILTERING  0
-#endif /* MAC_CONF_WITH_TSCH */
+/*---------------------------------------------------------------------------*/
+#define SPI_CONF_CONTROLLER_COUNT 2
 /*---------------------------------------------------------------------------*/
 /* Path to CMSIS header */
 #define CMSIS_CONF_HEADER_PATH               "cc2538_cm3.h"
 
-/* Path to headers with implementation of mutexes and memory barriers */
+/* Path to headers with implementation of mutexes, atomic and memory barriers */
 #define MUTEX_CONF_ARCH_HEADER_PATH          "mutex-cortex.h"
+#define ATOMIC_CONF_ARCH_HEADER_PATH         "atomic-cortex.h"
 #define MEMORY_BARRIER_CONF_ARCH_HEADER_PATH "memory-barrier-cortex.h"
+/*---------------------------------------------------------------------------*/
+#define GPIO_HAL_CONF_ARCH_HDR_PATH          "dev/gpio-hal-arch.h"
+#define GPIO_HAL_CONF_ARCH_SW_TOGGLE         1
+#define GPIO_HAL_CONF_PORT_PIN_NUMBERING     0
 /*---------------------------------------------------------------------------*/
 #endif /* CC2538_DEF_H_ */
 /*---------------------------------------------------------------------------*/

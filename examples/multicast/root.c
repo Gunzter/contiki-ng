@@ -45,11 +45,11 @@
 #include "net/ipv6/multicast/uip-mcast6.h"
 
 #include <string.h>
+#include <inttypes.h>
 
 #define DEBUG DEBUG_PRINT
 #include "net/ipv6/uip-debug.h"
-#include "rpl.h"
-#include "rpl-dag-root.h"
+#include "net/routing/routing.h"
 
 #define MAX_PAYLOAD_LEN 120
 #define MCAST_SINK_UDP_PORT 3001 /* Host byte order */
@@ -84,7 +84,7 @@ multicast_send(void)
   PRINTF("Send to: ");
   PRINT6ADDR(&mcast_conn->ripaddr);
   PRINTF(" Remote Port %u,", uip_ntohs(mcast_conn->rport));
-  PRINTF(" (msg=0x%08lx)", (unsigned long)uip_ntohl(*((uint32_t *)buf)));
+  PRINTF(" (msg=0x%08"PRIx32")", uip_ntohl(*((uint32_t *)buf)));
   PRINTF(" %lu bytes\n", (unsigned long)sizeof(id));
 
   seq_id++;
@@ -96,11 +96,19 @@ prepare_mcast(void)
 {
   uip_ipaddr_t ipaddr;
 
+#if UIP_MCAST6_CONF_ENGINE == UIP_MCAST6_ENGINE_MPL
+/*
+ * MPL defines a well-known MPL domain, MPL_ALL_FORWARDERS, which
+ *  MPL nodes are automatically members of. Send to that domain.
+ */
+  uip_ip6addr(&ipaddr, 0xFF03,0,0,0,0,0,0,0xFC);
+#else
   /*
    * IPHC will use stateless multicast compression for this destination
    * (M=1, DAC=0), with 32 inline bits (1E 89 AB CD)
    */
   uip_ip6addr(&ipaddr, 0xFF1E,0,0,0,0,0,0x89,0xABCD);
+#endif
   mcast_conn = udp_new(&ipaddr, UIP_HTONS(MCAST_SINK_UDP_PORT), NULL);
 }
 /*---------------------------------------------------------------------------*/
@@ -112,7 +120,7 @@ PROCESS_THREAD(rpl_root_process, ev, data)
 
   PRINTF("Multicast Engine: '%s'\n", UIP_MCAST6.name);
 
-  rpl_dag_root_init_dag_immediately();
+  NETSTACK_ROUTING.root_start();
 
   prepare_mcast();
 

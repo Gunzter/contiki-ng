@@ -43,6 +43,14 @@
 #include "contiki.h"
 #include "dev/radio.h"
 
+/**
+ *\brief The default channel for IEEE 802.15.4 networks.
+ */
+#ifdef IEEE802154_CONF_DEFAULT_CHANNEL
+#define IEEE802154_DEFAULT_CHANNEL           IEEE802154_CONF_DEFAULT_CHANNEL
+#else /* IEEE802154_CONF_DEFAULT_CHANNEL */
+#define IEEE802154_DEFAULT_CHANNEL           26
+#endif /* IEEE802154_CONF_DEFAULT_CHANNEL */
 
 typedef void (* mac_callback_t)(void *ptr, int status, int transmissions);
 
@@ -68,6 +76,9 @@ struct mac_driver {
 
   /** Turn the MAC layer off. */
   int (* off)(void);
+
+  /** Read out estimated max payload size based on payload in packetbuf */
+  int (* max_payload)(void);
 };
 
 /* Generic MAC return values. */

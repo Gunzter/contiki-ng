@@ -33,6 +33,8 @@
 /**
  * \addtogroup tsch
  * @{
+ * \file
+ *	TSCH security
 */
 
 #ifndef __TSCH_SECURITY_H__
@@ -41,22 +43,16 @@
 /********** Includes **********/
 
 #include "contiki.h"
-#include "net/mac/tsch/tsch-asn.h"
-#include "net/mac/tsch/tsch-private.h"
 #include "net/mac/framer/frame802154.h"
 #include "net/mac/framer/frame802154e-ie.h"
 #include "net/mac/llsec802154.h"
 
-/******** Configuration *******/
+/********** Configurarion *********/
 
 /* To enable TSCH security:
- * - set LLSEC802154_CONF_ENABLED
- * - set LLSEC802154_CONF_USES_EXPLICIT_KEYS
- * */
-
-#if LLSEC802154_ENABLED && !LLSEC802154_USES_EXPLICIT_KEYS
-#error LLSEC802154_ENABLED set but LLSEC802154_USES_EXPLICIT_KEYS unset
-#endif /* LLSEC802154_ENABLED */
+* - set LLSEC802154_CONF_ENABLED
+* - set LLSEC802154_CONF_USES_EXPLICIT_KEYS
+* */
 
 /* K1, defined in 6TiSCH minimal, is well-known (offers no security) and used for EBs only */
 #ifdef TSCH_SECURITY_CONF_K1
@@ -114,8 +110,9 @@
 #define TSCH_SECURITY_KEY_SEC_LEVEL_OTHER 5 /* Encryption + MIC-32, as per 6TiSCH minimal */
 #endif
 
-/************ Types ***********/
+/********** Data types *********/
 
+/* AES-128 key */
 typedef uint8_t aes_key[16];
 
 /********** Functions *********/
@@ -142,6 +139,12 @@ unsigned int tsch_security_parse_frame(const uint8_t *hdr, int hdrlen,
                                        int datalen, const frame802154_t *frame,
                                        const linkaddr_t *sender,
                                        struct tsch_asn_t *asn);
+
+/**
+ * \brief Set packetbuf (or eackbuf) attributes depending on a given frame type
+ * \param frame_type The frame type (FRAME802154_BEACONFRAME etc.)
+ */
+void tsch_security_set_packetbuf_attr(uint8_t frame_type);
 
 #endif /* __TSCH_SECURITY_H__ */
 /** @} */

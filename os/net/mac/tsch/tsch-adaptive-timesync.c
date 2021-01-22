@@ -44,10 +44,8 @@
 */
 
 #include "net/mac/tsch/tsch.h"
-#include "net/mac/tsch/tsch-conf.h"
-#include "net/mac/tsch/tsch-adaptive-timesync.h"
-#include "net/mac/tsch/tsch-log.h"
 #include <stdio.h>
+#include <inttypes.h>
 
 #if TSCH_ADAPTIVE_TIMESYNC
 
@@ -60,6 +58,8 @@ static int32_t compensated_ticks;
 static uint8_t timesync_entry_count;
 /* Since last learning of the  drift; may be more than time since last timesync */
 static uint32_t asn_since_last_learning;
+/* The last neighbor used for timesync */
+struct tsch_neighbor *last_timesource_neighbor;
 
 /* Units in which drift is stored: ppm * 256 */
 #define TSCH_DRIFT_UNIT (1000L * 1000 * 256)
@@ -112,7 +112,9 @@ timesync_learn_drift_ticks(uint32_t time_delta_asn, int32_t drift_ticks)
 
   TSCH_LOG_ADD(tsch_log_message,
       snprintf(log->message, sizeof(log->message),
-          "drift %ld", tsch_adaptive_timesync_get_drift_ppm()));
+          "drift %ld ppm (min/max delta seen: %"PRId32"/%"PRId32")",
+          tsch_adaptive_timesync_get_drift_ppm(),
+          min_drift_seen, max_drift_seen));
 }
 /*---------------------------------------------------------------------------*/
 /* Either reset or update the neighbor's drift */
@@ -123,11 +125,8 @@ tsch_timesync_update(struct tsch_neighbor *n, uint16_t time_delta_asn, int32_t d
    * or the timedelta is not too small, as smaller timedelta
    * means proportionally larger measurement error. */
   if(last_timesource_neighbor != n) {
+    tsch_adaptive_timesync_reset();
     last_timesource_neighbor = n;
-    drift_ppm = 0;
-    timesync_entry_count = 0;
-    compensated_ticks = 0;
-    asn_since_last_learning = 0;
   } else {
     asn_since_last_learning += time_delta_asn;
     if(asn_since_last_learning >= 4 * TSCH_SLOTS_PER_SECOND) {
@@ -139,6 +138,8 @@ tsch_timesync_update(struct tsch_neighbor *n, uint16_t time_delta_asn, int32_t d
       compensated_ticks += drift_correction;
     }
   }
+  min_drift_seen = MIN(drift_correction, min_drift_seen);
+  max_drift_seen = MAX(drift_correction, max_drift_seen);
 }
 /*---------------------------------------------------------------------------*/
 /* Error-accumulation free compensation algorithm */
@@ -191,6 +192,16 @@ tsch_timesync_adaptive_compensate(rtimer_clock_t time_delta_ticks)
   return result;
 }
 /*---------------------------------------------------------------------------*/
+void
+tsch_adaptive_timesync_reset(void)
+{
+  last_timesource_neighbor = NULL;
+  drift_ppm = 0;
+  timesync_entry_count = 0;
+  compensated_ticks = 0;
+  asn_since_last_learning = 0;
+}
+/*---------------------------------------------------------------------------*/
 #else /* TSCH_ADAPTIVE_TIMESYNC */
 /*---------------------------------------------------------------------------*/
 void
@@ -200,6 +211,16 @@ tsch_timesync_update(struct tsch_neighbor *n, uint16_t time_delta_asn, int32_t d
 /*---------------------------------------------------------------------------*/
 int32_t
 tsch_timesync_adaptive_compensate(rtimer_clock_t delta_ticks)
+{
+  return 0;
+}
+void
+tsch_adaptive_timesync_reset(void)
+{
+}
+/*---------------------------------------------------------------------------*/
+long int
+tsch_adaptive_timesync_get_drift_ppm(void)
 {
   return 0;
 }

@@ -42,16 +42,11 @@
 #include "net/ipv6/uip-udp-packet.h"
 #include "net/ipv6/simple-udp.h"
 #include "net/ipv6/uip-nameserver.h"
+#include "net/routing/routing.h"
 
-#if NETSTACK_CONF_WITH_IPV6
 #include "net/ipv6/uip-icmp6.h"
 #include "net/ipv6/uip-ds6.h"
-#endif /* NETSTACK_CONF_WITH_IPV6 */
-
-#include "net/ipv6/resolv.h"
-
 #include "net/ipv6/psock.h"
-
 #include "net/ipv6/udp-socket.h"
 #include "net/ipv6/tcp-socket.h"
 

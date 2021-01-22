@@ -290,6 +290,13 @@ nbr_table_register(nbr_table_t *table, nbr_table_callback *callback)
     ctimer_set(&periodic_timer, CLOCK_SECOND * 60, handle_periodic_timer, NULL);
   }
 #endif
+
+  if(nbr_table_is_registered(table)) {
+    /* Table already registered, just update callback */
+    table->callback = callback;
+    return 1;
+  }
+
   if(num_tables < MAX_NUM_TABLES) {
     table->index = num_tables++;
     table->callback = callback;
@@ -303,9 +310,10 @@ nbr_table_register(nbr_table_t *table, nbr_table_callback *callback)
 /*---------------------------------------------------------------------------*/
 /* Test whether a specified table has been registered or not */
 int
-nbr_table_is_register(nbr_table_t *table)
+nbr_table_is_registered(nbr_table_t *table)
 {
-  if(table != NULL && all_tables[table->index] == table) {
+  if(table != NULL && table->index >= 0 && table->index < MAX_NUM_TABLES
+                   && all_tables[table->index] == table) {
     return 1;
   }
   return 0;
@@ -345,6 +353,10 @@ nbr_table_add_lladdr(nbr_table_t *table, const linkaddr_t *lladdr, nbr_table_rea
   int index;
   nbr_table_item_t *item;
   nbr_table_key_t *key;
+
+  if(table == NULL) {
+    return NULL;
+  }
 
   /* Allow lladdr-free insertion, useful e.g. for IPv6 ND.
    * Only one such entry is possible at a time, indexed by linkaddr_null. */
@@ -431,39 +443,6 @@ nbr_table_get_lladdr(nbr_table_t *table, const void *item)
   return key != NULL ? &key->lladdr : NULL;
 }
 /*---------------------------------------------------------------------------*/
-/* Update link-layer address of an item */
-int
-nbr_table_update_lladdr(const linkaddr_t *old_addr, const linkaddr_t *new_addr,
-                        int remove_if_duplicate)
-{
-  int index;
-  int new_index;
-  nbr_table_key_t *key;
-  index = index_from_lladdr(old_addr);
-  if(index == -1) {
-    /* Failure to change since there is nothing to change. */
-    return 0;
-  }
-  if((new_index = index_from_lladdr(new_addr)) != -1) {
-    /* check if it is a change or not - do not remove / fail if same */
-    if(new_index == index) {
-      return 1;
-    }
-    /* This new entry already exists - failure! - remove if requested. */
-    if(remove_if_duplicate) {
-      remove_key(key_from_index(index));
-    }
-    return 0;
-  }
-  key = key_from_index(index);
-  /**
-   * Copy the new lladdr into the key - since we know that there is no
-   * conflicting entry.
-   */
-  memcpy(&key->lladdr, new_addr, sizeof(linkaddr_t));
-  return 1;
-}
-/*---------------------------------------------------------------------------*/
 #if DEBUG
 static void
 print_table()
@@ -490,4 +469,3 @@ handle_periodic_timer(void *ptr)
   ctimer_reset(&periodic_timer);
 }
 #endif
-

@@ -44,11 +44,6 @@
 
 #include "contiki.h"
 #include "net/mac/tsch/tsch.h"
-#include "net/mac/tsch/tsch-packet.h"
-#include "net/mac/tsch/tsch-private.h"
-#include "net/mac/tsch/tsch-schedule.h"
-#include "net/mac/tsch/tsch-security.h"
-#include "net/mac/tsch/tsch-log.h"
 #include "net/mac/framer/frame802154.h"
 #include "net/mac/framer/framer-802154.h"
 #include "net/netstack.h"
@@ -57,6 +52,10 @@
 #include "lib/aes-128.h"
 #include <stdio.h>
 #include <string.h>
+
+#if LLSEC802154_ENABLED && !LLSEC802154_USES_EXPLICIT_KEYS
+#error LLSEC802154_ENABLED set but LLSEC802154_USES_EXPLICIT_KEYS unset
+#endif /* LLSEC802154_ENABLED */
 
 /* The two keys K1 and K2 from 6TiSCH minimal configuration
  * K1: well-known, used for EBs
@@ -271,5 +270,34 @@ tsch_security_parse_frame(const uint8_t *hdr, int hdrlen, int datalen,
   } else {
     return 1;
   }
+}
+/*---------------------------------------------------------------------------*/
+void
+tsch_security_set_packetbuf_attr(uint8_t frame_type)
+{
+#if LLSEC802154_ENABLED
+  if(tsch_is_pan_secured) {
+    /* Set security level, key id and index */
+    switch(frame_type) {
+      case FRAME802154_ACKFRAME:
+        /* For ACKs, we set attriburtes via tsch_packet_eackbuf_set_attr, as classic
+         * interrupts can not be used from interrupt context. */
+        tsch_packet_eackbuf_set_attr(PACKETBUF_ATTR_SECURITY_LEVEL, TSCH_SECURITY_KEY_SEC_LEVEL_ACK);
+        tsch_packet_eackbuf_set_attr(PACKETBUF_ATTR_KEY_ID_MODE, FRAME802154_1_BYTE_KEY_ID_MODE);
+        tsch_packet_eackbuf_set_attr(PACKETBUF_ATTR_KEY_INDEX, TSCH_SECURITY_KEY_INDEX_ACK);
+        break;
+      case FRAME802154_BEACONFRAME:
+        packetbuf_set_attr(PACKETBUF_ATTR_SECURITY_LEVEL, TSCH_SECURITY_KEY_SEC_LEVEL_EB);
+        packetbuf_set_attr(PACKETBUF_ATTR_KEY_ID_MODE, FRAME802154_1_BYTE_KEY_ID_MODE);
+        packetbuf_set_attr(PACKETBUF_ATTR_KEY_INDEX, TSCH_SECURITY_KEY_INDEX_EB);
+        break;
+      default:
+        packetbuf_set_attr(PACKETBUF_ATTR_SECURITY_LEVEL, TSCH_SECURITY_KEY_SEC_LEVEL_OTHER);
+        packetbuf_set_attr(PACKETBUF_ATTR_KEY_ID_MODE, FRAME802154_1_BYTE_KEY_ID_MODE);
+        packetbuf_set_attr(PACKETBUF_ATTR_KEY_INDEX, TSCH_SECURITY_KEY_INDEX_OTHER);
+        break;
+    }
+  }
+#endif /* LLSEC802154_ENABLED */
 }
 /** @} */

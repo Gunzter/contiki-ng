@@ -99,9 +99,18 @@
 #endif /* COAP_MAX_OBSERVERS */
 
 /* Interval in notifies in which NON notifies are changed to CON notifies to check client. */
-#ifndef COAP_OBSERVE_REFRESH_INTERVAL
+#ifdef COAP_CONF_OBSERVE_REFRESH_INTERVAL
+#define COAP_OBSERVE_REFRESH_INTERVAL COAP_CONF_OBSERVE_REFRESH_INTERVAL
+#else
 #define COAP_OBSERVE_REFRESH_INTERVAL  20
 #endif /* COAP_OBSERVE_REFRESH_INTERVAL */
+
+/* Maximal length of observable URL */
+#ifdef COAP_CONF_OBSERVER_URL_LEN
+#define COAP_OBSERVER_URL_LEN COAP_CONF_OBSERVER_URL_LEN
+#else
+#define COAP_OBSERVER_URL_LEN 20
+#endif
 
 #endif /* COAP_CONF_H_ */
 /** @} */

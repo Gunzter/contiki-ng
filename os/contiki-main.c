@@ -42,14 +42,20 @@
 /*---------------------------------------------------------------------------*/
 #include "contiki.h"
 #include "contiki-net.h"
+#include "sys/node-id.h"
 #include "sys/platform.h"
 #include "sys/energest.h"
 #include "sys/stack-check.h"
 #include "dev/watchdog.h"
 
+#include "net/queuebuf.h"
+#include "net/app-layer/coap/coap-engine.h"
+#include "net/app-layer/snmp/snmp.h"
 #include "services/rpl-border-router/rpl-border-router.h"
 #include "services/orchestra/orchestra.h"
 #include "services/shell/serial-shell.h"
+#include "services/simple-energest/simple-energest.h"
+#include "services/tsch-cs/tsch-cs.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -58,6 +64,9 @@
 #include "sys/log.h"
 #define LOG_MODULE "Main"
 #define LOG_LEVEL LOG_LEVEL_MAIN
+/*---------------------------------------------------------------------------*/
+#define STRINGIFY(a) STRINGIFY_(a)
+#define STRINGIFY_(a) #a
 /*---------------------------------------------------------------------------*/
 int
 #if PLATFORM_MAIN_ACCEPTS_ARGS
@@ -85,14 +94,30 @@ main(void)
 
   platform_init_stage_two();
 
-  LOG_INFO("Starting " CONTIKI_VERSION_STRING "\n");
-
-  LOG_INFO(" Net: %s\n", NETSTACK_NETWORK.name);
-  LOG_INFO(" MAC: %s\n", NETSTACK_MAC.name);
-
+#if QUEUEBUF_ENABLED
+  queuebuf_init();
+#endif /* QUEUEBUF_ENABLED */
   netstack_init();
+  node_id_init();
 
-  LOG_INFO("Link-layer address ");
+  LOG_INFO("Starting " CONTIKI_VERSION_STRING "\n");
+  LOG_DBG("TARGET=%s", CONTIKI_TARGET_STRING);
+#ifdef CONTIKI_BOARD_STRING
+  LOG_DBG_(", BOARD=%s", CONTIKI_BOARD_STRING);
+#endif
+  LOG_DBG_("\n");
+  LOG_INFO("- Routing: %s\n", NETSTACK_ROUTING.name);
+  LOG_INFO("- Net: %s\n", NETSTACK_NETWORK.name);
+  LOG_INFO("- MAC: %s\n", NETSTACK_MAC.name);
+  LOG_INFO("- 802.15.4 PANID: 0x%04x\n", IEEE802154_PANID);
+#if MAC_CONF_WITH_TSCH
+  LOG_INFO("- 802.15.4 TSCH default hopping sequence length: %u\n", (unsigned)sizeof(TSCH_DEFAULT_HOPPING_SEQUENCE));
+#else /* MAC_CONF_WITH_TSCH */
+  LOG_INFO("- 802.15.4 Default channel: %u\n", IEEE802154_DEFAULT_CHANNEL);
+#endif /* MAC_CONF_WITH_TSCH */
+
+  LOG_INFO("Node ID: %u\n", node_id);
+  LOG_INFO("Link-layer address: ");
   LOG_INFO_LLADDR(&linkaddr_node_addr);
   LOG_INFO_("\n");
 
@@ -103,11 +128,19 @@ main(void)
     process_start(&tcpip_process, NULL);
 
     lladdr = uip_ds6_get_link_local(-1);
-    LOG_INFO("Tentative link-local IPv6 address ");
+    LOG_INFO("Tentative link-local IPv6 address: ");
     LOG_INFO_6ADDR(lladdr != NULL ? &lladdr->ipaddr : NULL);
     LOG_INFO_("\n");
   }
 #endif /* NETSTACK_CONF_WITH_IPV6 */
+
+#ifdef AES_128_CONF
+  LOG_INFO("AES_128_CONF Driver: " STRINGIFY(AES_128_CONF) "\n");
+#endif
+#ifdef CCM_STAR_CONF
+  LOG_INFO("CCM_STAR_CONF Driver: " STRINGIFY(CCM_STAR_CONF) "\n");
+#endif
+
 
   platform_init_stage_three();
 
@@ -125,6 +158,25 @@ main(void)
   serial_shell_init();
   LOG_DBG("With Shell\n");
 #endif /* BUILD_WITH_SHELL */
+
+#if BUILD_WITH_COAP
+  coap_engine_init();
+  LOG_DBG("With CoAP\n");
+#endif /* BUILD_WITH_SHELL */
+
+#if BUILD_WITH_SNMP
+  snmp_init();
+  LOG_DBG("With SNMP\n");
+#endif /* BUILD_WITH_SNMP */
+
+#if BUILD_WITH_SIMPLE_ENERGEST
+  simple_energest_init();
+#endif /* BUILD_WITH_SIMPLE_ENERGEST */
+
+#if BUILD_WITH_TSCH_CS
+  /* Initialize the channel selection module */
+  tsch_cs_adaptations_init();
+#endif /* BUILD_WITH_TSCH_CS */
 
   autostart_start(autostart_processes);
 

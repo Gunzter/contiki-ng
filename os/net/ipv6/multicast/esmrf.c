@@ -46,15 +46,16 @@
 #include "net/ipv6/multicast/uip-mcast6-route.h"
 #include "net/ipv6/multicast/uip-mcast6-stats.h"
 #include "net/ipv6/multicast/esmrf.h"
-#if UIP_CONF_IPV6_RPL_LITE == 1
-#include "net/rpl-lite/rpl.h"
-#else /* UIP_CONF_IPV6_RPL_LITE == 1 */
-#include "net/rpl-classic/rpl.h"
-#include "net/rpl-classic/rpl-private.h"
-#endif /* UIP_CONF_IPV6_RPL_LITE == 1 */
+#include "net/routing/routing.h"
 #include "net/ipv6/uip.h"
 #include "net/netstack.h"
 #include "net/packetbuf.h"
+#if ROUTING_CONF_RPL_LITE
+#include "net/routing/rpl-lite/rpl.h"
+#endif /* ROUTING_CONF_RPL_LITE */
+#if ROUTING_CONF_RPL_CLASSIC
+#include "net/routing/rpl-classic/rpl.h"
+#endif /* ROUTING_CONF_RPL_CLASSIC */
 #include <string.h>
 
 extern uint16_t uip_slen;
@@ -102,26 +103,18 @@ static struct uip_udp_conn *c;
 static uip_ipaddr_t src_ip;
 static uip_ipaddr_t des_ip;
 /*---------------------------------------------------------------------------*/
-/* uIPv6 Pointers */
-/*---------------------------------------------------------------------------*/
-#define UIP_IP_BUF        ((struct uip_ip_hdr *)&uip_buf[UIP_LLH_LEN])
-#define UIP_ICMP_BUF      ((struct uip_icmp_hdr *)&uip_buf[uip_l2_l3_hdr_len])
-#define UIP_ICMP_PAYLOAD  ((unsigned char *)&uip_buf[uip_l2_l3_icmp_hdr_len])
-#define UIP_UDP_BUF       ((struct uip_udp_hdr *)&uip_buf[UIP_LLH_LEN + UIP_IPH_LEN])
-/*---------------------------------------------------------------------------*/
 /* Local function prototypes */
 /*---------------------------------------------------------------------------*/
 static void icmp_input(void);
 static void icmp_output(void);
 static void mcast_fwd(void *p);
-int remove_ext_hdr(void);
 /*---------------------------------------------------------------------------*/
 /* Internal Data Structures */
 /*---------------------------------------------------------------------------*/
 struct multicast_on_behalf{   /*  ICMP message of multicast_on_behalf */
   uint16_t mcast_port;
   uip_ipaddr_t mcast_ip;
-  uint8_t mcast_payload[UIP_BUFSIZE - UIP_LLH_LEN - UIP_IPUDPH_LEN];
+  uint8_t mcast_payload[UIP_BUFSIZE - UIP_IPUDPH_LEN];
 };
 #define UIP_ICMP_MOB 18 /* Size of multicast_on_behalf ICMP header */
 /*---------------------------------------------------------------------------*/
@@ -142,7 +135,7 @@ icmp_output()
 
   struct multicast_on_behalf *mob;
   mob = (struct multicast_on_behalf *)UIP_ICMP_PAYLOAD;
-  memcpy(&mob->mcast_payload, &uip_buf[UIP_LLH_LEN + UIP_IPUDPH_LEN], uip_slen);
+  memcpy(&mob->mcast_payload, &uip_buf[UIP_IPUDPH_LEN], uip_slen);
 
   UIP_IP_BUF->vtc = 0x60;
   UIP_IP_BUF->tcflow = 0;
@@ -163,8 +156,7 @@ icmp_output()
   PRINT6ADDR(&UIP_IP_BUF->destipaddr);
   PRINTF("\n");
 
-  UIP_IP_BUF->len[0] = (UIP_ICMPH_LEN + payload_len) >> 8;
-  UIP_IP_BUF->len[1] = (UIP_ICMPH_LEN + payload_len) & 0xff;
+  uipbuf_set_len_field(UIP_IP_BUF, UIP_ICMPH_LEN + payload_len);
 
   UIP_ICMP_BUF->type = ICMP6_ESMRF;
   UIP_ICMP_BUF->icode = ESMRF_ICMP_CODE;
@@ -198,7 +190,7 @@ icmp_input()
   }
 #endif
 
-  remove_ext_hdr();
+  uip_remove_ext_hdr();
 
   PRINTF("ESMRF: ICMPv6 In from ");
   PRINT6ADDR(&UIP_IP_BUF->srcipaddr);
@@ -209,11 +201,11 @@ icmp_input()
   VERBOSE_PRINTF("ESMRF: ICMPv6 In, parse from %p to %p\n",
                  UIP_ICMP_PAYLOAD,
                  (uint8_t *)UIP_ICMP_PAYLOAD + uip_len -
-                 uip_l2_l3_icmp_hdr_len);
+                 uip_l3_icmp_hdr_len);
 
 
   locmobptr = (struct multicast_on_behalf *) UIP_ICMP_PAYLOAD;
-  loclen = uip_len - (uip_l2_l3_icmp_hdr_len + UIP_ICMP_MOB);
+  loclen = uip_len - (uip_l3_icmp_hdr_len + UIP_ICMP_MOB);
 
   uip_ipaddr_copy(&src_ip, &UIP_IP_BUF->srcipaddr);
   uip_ipaddr_copy(&des_ip, &UIP_IP_BUF->destipaddr);
@@ -223,13 +215,13 @@ icmp_input()
   c->rport = locmobptr->mcast_port;
   uip_slen = loclen;
   uip_udp_conn=c;
-  memcpy(&uip_buf[UIP_LLH_LEN + UIP_IPUDPH_LEN], locmobptr->mcast_payload,
-         loclen > UIP_BUFSIZE - UIP_LLH_LEN - UIP_IPUDPH_LEN?
-         UIP_BUFSIZE - UIP_LLH_LEN - UIP_IPUDPH_LEN: loclen);
+  memcpy(&uip_buf[UIP_IPUDPH_LEN], locmobptr->mcast_payload,
+         loclen > UIP_BUFSIZE - UIP_IPUDPH_LEN?
+         UIP_BUFSIZE - UIP_IPUDPH_LEN: loclen);
 
   uip_process(UIP_UDP_SEND_CONN);
 
-  memcpy(&mcast_buf, &uip_buf[UIP_LLH_LEN], uip_len);
+  memcpy(&mcast_buf, uip_buf, uip_len);
   mcast_len = uip_len;
   /* pass the packet to our uip_process to check if it is allowed to
    * accept this packet or not */
@@ -239,7 +231,7 @@ icmp_input()
 
   uip_process(UIP_DATA);
 
-  memcpy(&uip_buf[UIP_LLH_LEN], &mcast_buf, mcast_len);
+  memcpy(uip_buf, &mcast_buf, mcast_len);
   uip_len = mcast_len;
   /* Return the IP of the original Multicast sender */
   uip_ipaddr_copy(&UIP_IP_BUF->srcipaddr, &src_ip);
@@ -251,17 +243,17 @@ icmp_input()
     /* If we enter here, we will definitely forward */
     tcpip_ipv6_output();
   }
-  uip_clear_buf();
+  uipbuf_clear();
 }
 /*---------------------------------------------------------------------------*/
 static void
 mcast_fwd(void *p)
 {
-  memcpy(&uip_buf[UIP_LLH_LEN], &mcast_buf, mcast_len);
+  memcpy(uip_buf, &mcast_buf, mcast_len);
   uip_len = mcast_len;
   UIP_IP_BUF->ttl--;
   tcpip_output(NULL);
-  uip_clear_buf();
+  uipbuf_clear();
 }
 /*---------------------------------------------------------------------------*/
 static uint8_t
@@ -351,7 +343,7 @@ in()
         fwd_delay = fwd_delay * (1 + ((random_rand() >> 11) % fwd_spread));
       }
 
-      memcpy(&mcast_buf, &uip_buf[UIP_LLH_LEN], uip_len);
+      memcpy(&mcast_buf, uip_buf, uip_len);
       mcast_len = uip_len;
       ctimer_set(&mcast_periodic, fwd_delay, mcast_fwd, NULL);
     }
@@ -375,7 +367,9 @@ in()
 static void
 init()
 {
-  UIP_MCAST6_STATS_INIT(NULL);
+  ESMRF_STATS_INIT();
+  UIP_MCAST6_STATS_INIT(&stats);
+
   uip_mcast6_route_init();
   /* Register the ICMPv6 input handler */
   uip_icmp6_register_input_handler(&esmrf_icmp_handler);

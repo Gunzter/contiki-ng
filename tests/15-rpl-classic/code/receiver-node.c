@@ -38,7 +38,7 @@
 
 #include "simple-udp.h"
 
-#include "rpl.h"
+#include "net/routing/routing.h"
 #include "dev/leds.h"
 
 #include <stdio.h>
@@ -73,8 +73,9 @@ set_global_address(void)
   static uip_ipaddr_t ipaddr;
   int i;
   uint8_t state;
+  const uip_ipaddr_t *default_prefix = uip_ds6_default_prefix();
 
-  uip_ip6addr(&ipaddr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0);
+  uip_ip6addr_copy(&ipaddr, default_prefix);
   uip_ds6_set_addr_iid(&ipaddr, &uip_lladdr);
   uip_ds6_addr_add(&ipaddr, 0, ADDR_AUTOCONF);
 
@@ -91,9 +92,10 @@ set_global_address(void)
   return &ipaddr;
 }
 /*---------------------------------------------------------------------------*/
+#if RPL_WITH_STORING
 uint8_t should_blink = 1;
 static void
-route_callback(int event, uip_ipaddr_t *route, uip_ipaddr_t *ipaddr, int num_routes)
+route_callback(int event, const uip_ipaddr_t *route, const uip_ipaddr_t *ipaddr, int num_routes)
 {
   if(event == UIP_DS6_NOTIFICATION_DEFRT_ADD) {
     should_blink = 0;
@@ -101,17 +103,22 @@ route_callback(int event, uip_ipaddr_t *route, uip_ipaddr_t *ipaddr, int num_rou
     should_blink = 1;
   }
 }
+#endif /* #if RPL_WITH_STORING */
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(receiver_node_process, ev, data)
 {
   static struct etimer et;
+#if RPL_WITH_STORING
   static struct uip_ds6_notification n;
+#endif /* #if RPL_WITH_STORING */
 
   PROCESS_BEGIN();
 
   set_global_address();
 
+#if RPL_WITH_STORING
   uip_ds6_notification_add(&n, route_callback);
+#endif /* #if RPL_WITH_STORING */
 
   simple_udp_register(&unicast_connection, UDP_PORT,
                       NULL, UDP_PORT, receiver);
@@ -120,12 +127,14 @@ PROCESS_THREAD(receiver_node_process, ev, data)
   while(1) {
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
     etimer_reset(&et);
+#if RPL_WITH_STORING
     if(should_blink) {
       leds_on(LEDS_ALL);
       PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
       etimer_reset(&et);
       leds_off(LEDS_ALL);
     }
+#endif /* #if RPL_WITH_STORING */
   }
   PROCESS_END();
 }

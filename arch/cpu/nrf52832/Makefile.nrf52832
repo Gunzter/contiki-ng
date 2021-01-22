@@ -14,12 +14,6 @@ endif
 # custom MAC: ble_ipsp_mac_driver
 MAKE_MAC ?= MAKE_MAC_OTHER
 
-# we only support IPv6
-MAKE_NET ?= MAKE_NET_IPV6
-ifneq ($(MAKE_NET),MAKE_NET_IPV6)
-  $(error Only IPv6 stack is supported!)
-endif
-
 $(info SDK: $(NRF52_SDK_ROOT))
 
 ifeq ($(NRF52_DK_REVISION),)
@@ -31,9 +25,9 @@ ifneq ($(NRF52_WITHOUT_SOFTDEVICE),1)
     NRF52_SOFTDEVICE := $(shell find $(NRF52_SDK_ROOT) -name *iot*_softdevice.hex | head -n 1)
   endif
   $(info SoftDevice: $(NRF52_SOFTDEVICE))
-  LINKER_SCRIPT := $(CONTIKI_CPU)/ld/nrf52-$(NRF52_DK_REVISION)-sd.ld
+  LDSCRIPT ?= $(CONTIKI_CPU)/ld/nrf52-$(NRF52_DK_REVISION)-sd.ld
 else
-  LINKER_SCRIPT := $(CONTIKI_CPU)/ld/nrf52.ld
+  LDSCRIPT ?= $(CONTIKI_CPU)/ld/nrf52.ld
 endif
 
 OUTPUT_FILENAME := $(CONTIKI_PROJECT)
@@ -60,7 +54,7 @@ remduplicates = $(strip $(if $1,$(firstword $1) $(call remduplicates,$(filter-ou
 CONTIKI_CPU_DIRS += . dev ble #compat
 
 ### CPU-dependent source files
-CONTIKI_CPU_SOURCEFILES += clock.c rtimer-arch.c uart0.c putchar.c watchdog.c
+CONTIKI_CPU_SOURCEFILES += clock.c rtimer-arch.c uart0.c dbg.c watchdog.c
 CONTIKI_CPU_SOURCEFILES += int-master.c
 
 ifneq ($(NRF52_WITHOUT_SOFTDEVICE),1)
@@ -145,8 +139,8 @@ CFLAGS += -ggdb
 CFLAGS += -mfloat-abi=hard -mfpu=fpv4-sp-d16
 
 # keep every function in separate section. This will allow linker to dump unused functions
-LDFLAGS += -Xlinker -Map=$(LISTING_DIRECTORY)/$(OUTPUT_FILENAME).map
-LDFLAGS += -mabi=aapcs -L $(TEMPLATE_PATH) -T$(LINKER_SCRIPT)
+LDFLAGS += -Xlinker -Map=$(CONTIKI_NG_PROJECT_MAP)
+LDFLAGS += -mabi=aapcs -L $(TEMPLATE_PATH)
 LDFLAGS += -mfloat-abi=hard -mfpu=fpv4-sp-d16
 # let linker to dump unused sections
 LDFLAGS += -Wl,--gc-sections
@@ -178,23 +172,25 @@ vpath %.s $(ASM_PATHS)
 
 OBJECTS = $(C_OBJECTS) $(ASM_OBJECTS)
 
-CLEAN += nrf52832.a
+NRFLIB = $(BUILD_DIR_BOARD)/nrf52832.a
 
-TARGET_LIBS= nrf52832.a $(NRF52_SDK_ROOT)/components/iot/ble_6lowpan/lib/ble_6lowpan.a
+TARGET_LIBS = $(NRFLIB) $(NRF52_SDK_ROOT)/components/iot/ble_6lowpan/lib/ble_6lowpan.a
 
-nrf52832.a: $(OBJECTS)
+$(NRFLIB): $(OBJECTS)
 	$(TRACE_AR)
 	$(Q)$(AR) $(AROPTS) $@ $^
 
 # Assemble files
 $(OBJECT_DIRECTORY)/%.o: %.s
-	@echo Compiling file: $(notdir $<)
+	$(TRACE_CC)
 	$(Q)$(CC) $(ASMFLAGS) $(addprefix -I$(NRF52_SDK_ROOT)/, $(INC_PATHS)) -c -o $@ $<
 
-%.jlink:
-	sed -e 's/#OUTPUT_FILENAME#/$*.hex/' $(CONTIKI_CPU)/flash.jlink > $@
+include $(CONTIKI)/$(CONTIKI_NG_CM4_DIR)/Makefile.cm4
 
-%.flash: %.hex %.jlink
+%.jlink: $(OUT_HEX)
+	sed -e 's,#OUTPUT_FILENAME#,$<,' $(CONTIKI_CPU)/flash.jlink > $@
+
+%.flash: %.jlink
 	@echo Flashing: $^
 	$(JLINK) $(JLINK_OPTS) -CommanderScript $*.jlink
 
@@ -209,5 +205,3 @@ erase:
 	$(JLINK) $(JLINK_OPTS) -CommanderScript $(CONTIKI_CPU)/erase.jlink
 
 .PHONY: softdevice.jlink
-
-include $(CONTIKI)/arch/cpu/arm/cortex-m/cm4/Makefile.cm4

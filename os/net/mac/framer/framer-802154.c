@@ -171,7 +171,6 @@ framer_802154_setup_params(packetbuf_attr_t (*get_attr)(uint8_t type),
 #if LLSEC802154_USES_EXPLICIT_KEYS
   params->aux_hdr.security_control.key_id_mode = get_attr(PACKETBUF_ATTR_KEY_ID_MODE);
   params->aux_hdr.key_index = get_attr(PACKETBUF_ATTR_KEY_INDEX);
-  params->aux_hdr.key_source.u16[0] = get_attr(PACKETBUF_ATTR_KEY_SOURCE_BYTES_0_1);
 #endif /* LLSEC802154_USES_EXPLICIT_KEYS */
 #else
   params->fcf.security_enabled = 0;
@@ -241,6 +240,7 @@ parse(void)
 
   if(hdr_len && packetbuf_hdrreduce(hdr_len)) {
     packetbuf_set_attr(PACKETBUF_ATTR_FRAME_TYPE, frame.fcf.frame_type);
+    packetbuf_set_attr(PACKETBUF_ATTR_MAC_ACK, frame.fcf.ack_required);
 
     if(frame.fcf.dest_addr_mode) {
       if(frame.dest_pid != frame802154_get_pan_id() &&
@@ -273,7 +273,6 @@ parse(void)
 #if LLSEC802154_USES_EXPLICIT_KEYS
       packetbuf_set_attr(PACKETBUF_ATTR_KEY_ID_MODE, frame.aux_hdr.security_control.key_id_mode);
       packetbuf_set_attr(PACKETBUF_ATTR_KEY_INDEX, frame.aux_hdr.key_index);
-      packetbuf_set_attr(PACKETBUF_ATTR_KEY_SOURCE_BYTES_0_1, frame.aux_hdr.key_source.u16[0]);
 #endif /* LLSEC802154_USES_EXPLICIT_KEYS */
     }
 #endif /* LLSEC802154_USES_AUX_HEADER */

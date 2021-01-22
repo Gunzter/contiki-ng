@@ -38,21 +38,15 @@
  * \author  Julien Abeille <jabeille@cisco.com> (IPv6 related code)
  */
 
+#include "contiki.h"
 #include "contiki-net.h"
 #include "net/ipv6/uip-packetqueue.h"
 
 #include "net/ipv6/uip-nd6.h"
 #include "net/ipv6/uip-ds6.h"
+#include "net/ipv6/uip-ds6-nbr.h"
 #include "net/linkaddr.h"
-
-#if UIP_CONF_IPV6_RPL
-#if UIP_CONF_IPV6_RPL_LITE == 1
-#include "net/rpl-lite/rpl.h"
-#else /* UIP_CONF_IPV6_RPL_LITE == 1 */
-#include "net/rpl-classic/rpl.h"
-#include "net/rpl-classic/rpl-private.h"
-#endif /* UIP_CONF_IPV6_RPL_LITE == 1 */
-#endif
+#include "net/routing/routing.h"
 
 #include <string.h>
 
@@ -60,10 +54,6 @@
 #include "sys/log.h"
 #define LOG_MODULE "TCP/IP"
 #define LOG_LEVEL LOG_LEVEL_TCPIP
-
-#define UIP_ICMP_BUF ((struct uip_icmp_hdr *)&uip_buf[UIP_LLIPH_LEN + uip_ext_len])
-#define UIP_IP_BUF ((struct uip_ip_hdr *)&uip_buf[UIP_LLH_LEN])
-#define UIP_TCP_BUF ((struct uip_tcpip_hdr *)&uip_buf[UIP_LLH_LEN])
 
 #ifdef UIP_FALLBACK_INTERFACE
 extern struct uip_fallback_interface UIP_FALLBACK_INTERFACE;
@@ -103,11 +93,6 @@ enum {
   PACKET_INPUT
 };
 
-#if UIP_CONF_IPV6_RPL && RPL_WITH_NON_STORING
-#define NEXTHOP_NON_STORING(addr) rpl_ext_header_srh_get_next_hop(addr)
-#else
-#define NEXTHOP_NON_STORING(addr) 0
-#endif
 /*---------------------------------------------------------------------------*/
 static void
 init_appstate(uip_tcp_appstate_t *as, void *state)
@@ -140,7 +125,7 @@ tcpip_output(const uip_lladdr_t *a)
     return ret;
   } else {
     /* Ok, ignore and drop... */
-    uip_clear_buf();
+    uipbuf_clear();
     return 0;
   }
 }
@@ -179,6 +164,8 @@ static void
 packet_input(void)
 {
   if(uip_len > 0) {
+    LOG_INFO("input: received %u bytes\n", uip_len);
+
     check_for_tcp_syn();
 
 #if UIP_TAG_TC_WITH_VARIABLE_RETRANSMISSIONS
@@ -461,18 +448,17 @@ tcpip_input(void)
      NETSTACK_IP_PROCESS) {
     process_post_synch(&tcpip_process, PACKET_INPUT, NULL);
   } /* else - do nothing and drop */
-  uip_clear_buf();
+  uipbuf_clear();
 }
-/*---------------------------------------------------------------------------*/
-extern void remove_ext_hdr(void);
 /*---------------------------------------------------------------------------*/
 static void
 output_fallback(void)
 {
 #ifdef UIP_FALLBACK_INTERFACE
+  uip_last_proto = *((uint8_t *)UIP_IP_BUF + 40);
   LOG_INFO("fallback: removing ext hdrs & setting proto %d %d\n",
-         uip_ext_len, *((uint8_t *)UIP_IP_BUF + 40));
-  remove_ext_hdr();
+         uip_ext_len, uip_last_proto);
+  uip_remove_ext_hdr();
   /* Inform the other end that the destination is not reachable. If it's
    * not informed routes might get lost unexpectedly until there's a need
    * to send a new packet to the peer */
@@ -489,24 +475,7 @@ output_fallback(void)
 }
 /*---------------------------------------------------------------------------*/
 static void
-drop_route(uip_ds6_route_t *route)
-{
-#if UIP_CONF_IPV6_RPL && (UIP_CONF_IPV6_RPL_LITE == 0)
-
-  /* If we are running RPL, and if we are the root of the
-     network, we'll trigger a global repair before we remove
-     the route. */
-  rpl_dag_t *dag;
-  dag = (rpl_dag_t *)route->state.dag;
-  if(dag != NULL && dag->instance != NULL) {
-    rpl_repair_root(dag->instance->instance_id);
-  }
-#endif /* UIP_CONF_IPV6_RPL && (UIP_CONF_IPV6_RPL_LITE == 0) */
-  uip_ds6_route_rm(route);
-}
-/*---------------------------------------------------------------------------*/
-static void
-annotate_transmission(uip_ipaddr_t *nexthop)
+annotate_transmission(const uip_ipaddr_t *nexthop)
 {
 #if TCPIP_CONF_ANNOTATE_TRANSMISSIONS
   static uint8_t annotate_last;
@@ -521,19 +490,19 @@ annotate_transmission(uip_ipaddr_t *nexthop)
 #endif /* TCPIP_CONF_ANNOTATE_TRANSMISSIONS */
 }
 /*---------------------------------------------------------------------------*/
-static uip_ipaddr_t*
+static const uip_ipaddr_t*
 get_nexthop(uip_ipaddr_t *addr)
 {
-  uip_ipaddr_t *nexthop;
+  const uip_ipaddr_t *nexthop;
   uip_ds6_route_t *route;
 
-  LOG_INFO("output: processing packet from ");
+  LOG_INFO("output: processing %u bytes packet from ", uip_len);
   LOG_INFO_6ADDR(&UIP_IP_BUF->srcipaddr);
   LOG_INFO_(" to ");
   LOG_INFO_6ADDR(&UIP_IP_BUF->destipaddr);
   LOG_INFO_("\n");
 
-  if(NEXTHOP_NON_STORING(addr)) {
+  if(NETSTACK_ROUTING.ext_header_srh_get_next_hop(addr)) {
     LOG_INFO("output: selected next hop from SRH: ");
     LOG_INFO_6ADDR(addr);
     LOG_INFO_("\n");
@@ -571,9 +540,11 @@ get_nexthop(uip_ipaddr_t *addr)
        never responded to link-layer acks, we drop its route. */
     if(nexthop == NULL) {
       LOG_ERR("output: found dead route\n");
-      drop_route(route);
-      /* We don't have a nexthop to send the packet to, so we drop
-         it. */
+      /* Notifiy the routing protocol that we are about to remove the route */
+      NETSTACK_ROUTING.drop_route(route);
+      /* Remove the route */
+      uip_ds6_route_rm(route);
+      /* We don't have a nexthop to send the packet to, so we drop it. */
     } else {
       LOG_INFO("output: found next hop from routing table: ");
       LOG_INFO_6ADDR(nexthop);
@@ -621,7 +592,7 @@ send_queued(uip_ds6_nbr_t *nbr)
 }
 /*---------------------------------------------------------------------------*/
 static int
-send_nd6_ns(uip_ipaddr_t *nexthop)
+send_nd6_ns(const uip_ipaddr_t *nexthop)
 {
   int err = 1;
 
@@ -662,7 +633,7 @@ tcpip_ipv6_output(void)
   uip_ipaddr_t ipaddr;
   uip_ds6_nbr_t *nbr = NULL;
   const uip_lladdr_t *linkaddr;
-  uip_ipaddr_t *nexthop;
+  const uip_ipaddr_t *nexthop;
 
   if(uip_len == 0) {
     return;
@@ -678,14 +649,13 @@ tcpip_ipv6_output(void)
     goto exit;
   }
 
-#if UIP_CONF_IPV6_RPL
-  if(!rpl_ext_header_update()) {
+
+  if(!NETSTACK_ROUTING.ext_header_update()) {
     /* Packet can not be forwarded */
-    LOG_ERR("output: RPL header update error\n");
-    uip_clear_buf();
+    LOG_ERR("output: routing protocol extension header update error\n");
+    uipbuf_clear();
     return;
   }
-#endif /* UIP_CONF_IPV6_RPL */
 
   if(uip_is_addr_mcast(&UIP_IP_BUF->destipaddr)) {
     linkaddr = NULL;
@@ -771,7 +741,7 @@ send_packet:
   }
 
 exit:
-  uip_clear_buf();
+  uipbuf_clear();
   return;
 }
 /*---------------------------------------------------------------------------*/
@@ -855,10 +825,8 @@ PROCESS_THREAD(tcpip_process, ev, data)
 #ifdef UIP_FALLBACK_INTERFACE
   UIP_FALLBACK_INTERFACE.init();
 #endif
-  /* initialize RPL if configured for using RPL */
-#if UIP_CONF_IPV6_RPL
-  rpl_init();
-#endif /* UIP_CONF_IPV6_RPL */
+  /* Initialize routing protocol */
+  NETSTACK_ROUTING.init();
 
   while(1) {
     PROCESS_YIELD();

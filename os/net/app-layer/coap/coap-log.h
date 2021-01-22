@@ -85,5 +85,24 @@
  */
 void coap_log_string(const char *text, size_t len);
 
+/* CoAP bytes */
+#define LOG_COAP_BYTES(level, bytes, len) do {              \
+    if(level <= (LOG_LEVEL)) {                              \
+      coap_log_bytes(bytes, len);                           \
+    }                                                       \
+  } while (0)
+
+#define LOG_ERR_COAP_BYTES(bytes, len)  LOG_COAP_BYTES(LOG_LEVEL_ERR, bytes, len)
+#define LOG_WARN_COAP_BYTES(bytes, len) LOG_COAP_BYTES(LOG_LEVEL_WARN, bytes, len)
+#define LOG_INFO_COAP_BYTES(bytes, len) LOG_COAP_BYTES(LOG_LEVEL_INFO, bytes, len)
+#define LOG_DBG_COAP_BYTES(bytes, len)  LOG_COAP_BYTES(LOG_LEVEL_DBG, bytes, len)
+
+/**
+ * \brief Logs a CoAP hex-string that has a length.
+ * \param bytes The CoAP hex-string
+ * \param len  The number of bytes in the CoAP string
+ */
+void coap_log_bytes(const uint8_t *bytes, size_t len);
+
 #endif /* COAP_LOG_H_ */
 /** @} */

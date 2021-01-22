@@ -40,7 +40,7 @@
 #include "contiki-lib.h"
 
 #include "lib/assert.h"
-#include "net/mac/tsch/tsch-schedule.h"
+#include "net/mac/tsch/tsch.h"
 #include "net/mac/tsch/sixtop/sixtop.h"
 #include "net/mac/tsch/sixtop/sixp.h"
 #include "net/mac/tsch/sixtop/sixp-nbr.h"
@@ -108,7 +108,7 @@ print_cell_list(const uint8_t *cell_list, uint16_t cell_list_len)
   uint16_t i;
   sf_simple_cell_t cell;
 
-  for(i = 0; i < (cell_list_len / sizeof(cell)); i++) {
+  for(i = 0; i < cell_list_len; i += sizeof(cell)) {
     read_cell(&cell_list[i], &cell);
     PRINTF("%u ", cell.timeslot_offset);
   }
@@ -132,7 +132,7 @@ add_links_to_schedule(const linkaddr_t *peer_addr, uint8_t link_option,
     return;
   }
 
-  for(i = 0; i < (cell_list_len / sizeof(cell)); i++) {
+  for(i = 0; i < cell_list_len; i += sizeof(cell)) {
     read_cell(&cell_list[i], &cell);
     if(cell.timeslot_offset == 0xffff) {
       continue;
@@ -144,7 +144,7 @@ add_links_to_schedule(const linkaddr_t *peer_addr, uint8_t link_option,
            peer_addr->u8[7]);
     tsch_schedule_add_link(slotframe,
                            link_option, LINK_TYPE_NORMAL, peer_addr,
-                           cell.timeslot_offset, cell.channel_offset);
+                           cell.timeslot_offset, cell.channel_offset, 1);
     break;
   }
 }
@@ -166,14 +166,15 @@ remove_links_to_schedule(const uint8_t *cell_list, uint16_t cell_list_len)
     return;
   }
 
-  for(i = 0; i < (cell_list_len / sizeof(cell)); i++) {
+  for(i = 0; i < cell_list_len; i += sizeof(cell)) {
     read_cell(&cell_list[i], &cell);
     if(cell.timeslot_offset == 0xffff) {
       continue;
     }
 
     tsch_schedule_remove_link_by_timeslot(slotframe,
-                                          cell.timeslot_offset);
+                                          cell.timeslot_offset,
+                                          cell.channel_offset);
   }
 }
 
@@ -198,7 +199,6 @@ add_response_sent_callback(void *arg, uint16_t arg_len,
      (nbr = sixp_nbr_find(dest_addr)) != NULL) {
     add_links_to_schedule(dest_addr, LINK_OPTION_RX,
                           cell_list, cell_list_len);
-    sixp_nbr_advance_gen(nbr);
   }
 }
 
@@ -222,7 +222,6 @@ delete_response_sent_callback(void *arg, uint16_t arg_len,
                             body, body_len) == 0 &&
      (nbr = sixp_nbr_find(dest_addr)) != NULL) {
     remove_links_to_schedule(cell_list, cell_list_len);
-    sixp_nbr_advance_gen(nbr);
   }
 }
 
@@ -272,7 +271,8 @@ add_req_input(const uint8_t *body, uint16_t body_len, const linkaddr_t *peer_add
         i += sizeof(cell)) {
       read_cell(&cell_list[i], &cell);
       if(tsch_schedule_get_link_by_timeslot(slotframe,
-                                            cell.timeslot_offset) == NULL) {
+                                            cell.timeslot_offset,
+                                            cell.channel_offset) == NULL) {
         sixp_pkt_set_cell_list(SIXP_PKT_TYPE_RESPONSE,
                                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_SUCCESS,
                                (uint8_t *)&cell, sizeof(cell),
@@ -337,10 +337,11 @@ delete_req_input(const uint8_t *body, uint16_t body_len,
 
   if(num_cells > 0 && cell_list_len > 0) {
     /* ensure before delete */
-    for(i = 0, removed_link = 0; i < (cell_list_len / sizeof(cell)); i++) {
+    for(i = 0, removed_link = 0; i < cell_list_len; i += sizeof(cell)) {
       read_cell(&cell_list[i], &cell);
       if(tsch_schedule_get_link_by_timeslot(slotframe,
-                                            cell.timeslot_offset) != NULL) {
+                                            cell.timeslot_offset,
+                                            cell.channel_offset) != NULL) {
         sixp_pkt_set_cell_list(SIXP_PKT_TYPE_RESPONSE,
                                (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_SUCCESS,
                                (uint8_t *)&cell, sizeof(cell),
@@ -429,7 +430,6 @@ response_input(sixp_pkt_rc_t rc,
         PRINTF("\n");
         add_links_to_schedule(peer_addr, LINK_OPTION_TX,
                               cell_list, cell_list_len);
-        sixp_nbr_advance_gen(nbr);
         break;
       case SIXP_PKT_CMD_DELETE:
         if(sixp_pkt_get_cell_list(SIXP_PKT_TYPE_RESPONSE,
@@ -443,7 +443,6 @@ response_input(sixp_pkt_rc_t rc,
         print_cell_list(cell_list, cell_list_len);
         PRINTF("\n");
         remove_links_to_schedule(cell_list, cell_list_len);
-        sixp_nbr_advance_gen(nbr);
         break;
       case SIXP_PKT_CMD_COUNT:
       case SIXP_PKT_CMD_LIST:
@@ -476,7 +475,7 @@ sf_simple_add_links(linkaddr_t *peer_addr, uint8_t num_links)
     /* Randomly select a slot offset within TSCH_SCHEDULE_DEFAULT_LENGTH */
     random_slot = ((random_rand() & 0xFF)) % TSCH_SCHEDULE_DEFAULT_LENGTH;
 
-    if(tsch_schedule_get_link_by_timeslot(sf, random_slot) == NULL) {
+    if(tsch_schedule_get_link_by_timeslot(sf, random_slot, 0) == NULL) {
 
       /* To prevent repeated slots */
       for(i = 0; i < index; i++) {
@@ -564,7 +563,7 @@ sf_simple_remove_links(linkaddr_t *peer_addr)
   assert(peer_addr != NULL && sf != NULL);
 
   for(i = 0; i < TSCH_SCHEDULE_DEFAULT_LENGTH; i++) {
-    l = tsch_schedule_get_link_by_timeslot(sf, i);
+    l = tsch_schedule_get_link_by_timeslot(sf, i, 0);
 
     if(l) {
       /* Non-zero value indicates a scheduled link */
@@ -617,5 +616,6 @@ const sixtop_sf_t sf_simple_driver = {
   CLOCK_SECOND,
   NULL,
   input,
+  NULL,
   NULL
 };

@@ -46,8 +46,12 @@
 
 #include "lib/list.h"
 #include "lib/memb.h"
-
 #include <string.h>
+
+#include "sys/log.h"
+#define LOG_MODULE "IPv6"
+#define LOG_LEVEL LOG_LEVEL_NONE
+
 /** \brief Nameserver record */
 typedef struct uip_nameserver_record {
   struct uip_nameserver_record *next;
@@ -94,6 +98,11 @@ init(void)
 void
 uip_nameserver_update(const uip_ipaddr_t *nameserver, uint32_t lifetime)
 {
+  LOG_DBG("Nameserver update:");
+  LOG_DBG_6ADDR(nameserver);
+  LOG_DBG("\n");
+
+
 #if UIP_NAMESERVER_POOL_SIZE > 1
   register uip_nameserver_record *e;
 
@@ -108,7 +117,7 @@ uip_nameserver_update(const uip_ipaddr_t *nameserver, uint32_t lifetime)
        *          the the eldest ones */
     }
   }
-  
+
   if(e == NULL) {
     if((e = memb_alloc(&dnsmemb)) != NULL) {
       list_add(dns, e);
@@ -221,11 +230,7 @@ uip_nameserver_count(void)
   }
   return list_length(dns);
 #else /* UIP_NAMESERVER_POOL_SIZE > 1 */
-#if NETSTACK_CONF_WITH_IPV6
   if(uip_is_addr_unspecified(&serveraddr)) {
-#else /* NETSTACK_CONF_WITH_IPV6 */
-  if(uip_ipaddr_cmp(&serveraddr, &uip_all_zeroes_addr)) {
-#endif /* NETSTACK_CONF_WITH_IPV6 */
     return 0;
   } else {
     return 1;

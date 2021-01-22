@@ -35,8 +35,10 @@
 #include "contiki-lib.h"
 #include "lib/assert.h"
 
+#include "net/packetbuf.h"
 #include "net/mac/tsch/tsch.h"
 #include "net/mac/tsch/sixtop/sixtop.h"
+#include "net/mac/tsch/sixtop/sixp-nbr.h"
 #include "net/mac/tsch/sixtop/sixp-trans.h"
 
 #include "unit-test/unit-test.h"
@@ -62,7 +64,8 @@ static const sixtop_sf_t test_sf = {
   TEST_SF_TIMEOUT_VALUE,
   NULL,
   NULL,
-  timeout_handler
+  timeout_handler,
+  NULL
 };
 
 static void
@@ -443,6 +446,8 @@ UNIT_TEST(test_state_transition_2_step_initiator)
 
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) == SIXP_TRANS_STATE_INIT);
   UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_REQUEST_SENDING) == 0);
+  UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans, SIXP_TRANS_STATE_REQUEST_SENT) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
                    SIXP_TRANS_STATE_REQUEST_SENT);
@@ -490,6 +495,8 @@ UNIT_TEST(test_state_transition_2_step_responder)
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
                    SIXP_TRANS_STATE_REQUEST_RECEIVED);
   UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_RESPONSE_SENDING) == 0);
+  UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans, SIXP_TRANS_STATE_RESPONSE_SENT) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
                    SIXP_TRANS_STATE_RESPONSE_SENT);
@@ -530,6 +537,8 @@ UNIT_TEST(test_state_transition_3_step_initiator)
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) == SIXP_TRANS_STATE_INIT);
   UNIT_TEST_ASSERT(sixp_trans_get_mode(trans) == SIXP_TRANS_MODE_3_STEP);
   UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_REQUEST_SENDING) == 0);
+  UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans, SIXP_TRANS_STATE_REQUEST_SENT) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
                    SIXP_TRANS_STATE_REQUEST_SENT);
@@ -537,6 +546,8 @@ UNIT_TEST(test_state_transition_3_step_initiator)
     sixp_trans_transit_state(trans, SIXP_TRANS_STATE_RESPONSE_RECEIVED) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
                    SIXP_TRANS_STATE_RESPONSE_RECEIVED);
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_CONFIRMATION_SENDING) == 0);
   UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans, SIXP_TRANS_STATE_CONFIRMATION_SENT) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
@@ -581,6 +592,8 @@ UNIT_TEST(test_state_transition_3_step_responder)
     sixp_trans_transit_state(trans, SIXP_TRANS_STATE_REQUEST_RECEIVED) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
                    SIXP_TRANS_STATE_REQUEST_RECEIVED);
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_RESPONSE_SENDING) == 0);
   UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans, SIXP_TRANS_STATE_RESPONSE_SENT) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
@@ -655,6 +668,9 @@ UNIT_TEST(test_state_transition_invalid_transition_initiator)
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) == SIXP_TRANS_STATE_INIT);
 
   /* from REQUEST_SENT */
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans,
+                             SIXP_TRANS_STATE_REQUEST_SENDING) == 0);
   UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans,
                              SIXP_TRANS_STATE_REQUEST_SENT) == 0);
@@ -748,6 +764,9 @@ UNIT_TEST(test_state_transition_invalid_transition_initiator)
   /* from CONFIRMATION_SENT */
   UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans,
+                             SIXP_TRANS_STATE_CONFIRMATION_SENDING) == 0);
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans,
                              SIXP_TRANS_STATE_CONFIRMATION_SENT) == 0);
   UNIT_TEST_ASSERT(
     sixp_trans_get_state(trans) == SIXP_TRANS_STATE_CONFIRMATION_SENT);
@@ -807,6 +826,9 @@ UNIT_TEST(test_state_transition_invalid_transition_initiator)
   UNIT_TEST_ASSERT(
     sixp_trans_get_state(trans) == SIXP_TRANS_STATE_INIT);
 
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans,
+                             SIXP_TRANS_STATE_REQUEST_SENDING) == 0);
   UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans,
                              SIXP_TRANS_STATE_REQUEST_SENT) == 0);
@@ -942,6 +964,9 @@ UNIT_TEST(test_state_transition_invalid_transition_responder)
   /* from RESPONSE_SENT */
   UNIT_TEST_ASSERT(
     sixp_trans_transit_state(trans,
+                             SIXP_TRANS_STATE_RESPONSE_SENDING) == 0);
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans,
                              SIXP_TRANS_STATE_RESPONSE_SENT) == 0);
   UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
                    SIXP_TRANS_STATE_RESPONSE_SENT);
@@ -1056,6 +1081,10 @@ UNIT_TEST(test_state_transition_invalid_transition_responder)
     sixp_trans_get_state(trans) == SIXP_TRANS_STATE_REQUEST_RECEIVED);
 
   UNIT_TEST_ASSERT(sixp_trans_transit_state(trans,
+                                            SIXP_TRANS_STATE_RESPONSE_SENDING)
+                   == 0);
+
+  UNIT_TEST_ASSERT(sixp_trans_transit_state(trans,
                                       SIXP_TRANS_STATE_RESPONSE_SENT) == 0);
   UNIT_TEST_ASSERT(
     sixp_trans_get_state(trans) == SIXP_TRANS_STATE_RESPONSE_SENT);
@@ -1071,6 +1100,176 @@ UNIT_TEST(test_state_transition_invalid_transition_responder)
                        SIXP_TRANS_STATE_TERMINATING) == 0);
   UNIT_TEST_ASSERT(
       sixp_trans_get_state(trans) == SIXP_TRANS_STATE_TERMINATING);
+
+  UNIT_TEST_END();
+}
+
+UNIT_TEST_REGISTER(test_from_request_sending_to_response_received,
+                   "test from REQUEST_SENDING to RESPONSE_RECEIVED");
+UNIT_TEST(test_from_request_sending_to_response_received)
+{
+  sixp_pkt_t pkt;
+  linkaddr_t peer_addr;
+  sixp_trans_t *trans;
+  uint8_t req_body[8];
+
+  UNIT_TEST_BEGIN();
+  test_setup();
+
+  /* allocate a transaction for the add request */
+  memset(&pkt, 0, sizeof(pkt));
+  memset(&peer_addr, 0, sizeof(peer_addr));
+  memset(req_body, 0, sizeof(req_body));
+
+  pkt.sfid = TEST_SF_SFID;
+  pkt.type = SIXP_PKT_TYPE_REQUEST;
+  pkt.code = (sixp_pkt_code_t)(uint8_t)SIXP_PKT_CMD_ADD;
+  pkt.seqno = 10;
+  pkt.body = req_body;
+  pkt.body_len = 8; /* Metadata, CellOptions, NumCells, and CellList */
+  peer_addr.u8[0] = 0;
+
+  UNIT_TEST_ASSERT((trans = sixp_trans_alloc(&pkt, &peer_addr)) != NULL);
+
+  /* change its state to REQUEST_SENDING*/
+  UNIT_TEST_ASSERT(sixp_trans_get_state(trans) == SIXP_TRANS_STATE_INIT);
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_REQUEST_SENDING) == 0);
+  UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
+                   SIXP_TRANS_STATE_REQUEST_SENDING);
+
+  /*
+   * change its state to RESPONSE_RECEIVED without visiting
+   * REQUEST_SENT
+   */
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_RESPONSE_RECEIVED) == 0);
+  UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
+                   SIXP_TRANS_STATE_RESPONSE_RECEIVED);
+
+  UNIT_TEST_END();
+}
+
+UNIT_TEST_REGISTER(test_from_response_sending_to_confirmation_received,
+                   "test from RESPONSE_SENDING to CONFIRMATION_RECEIVED");
+UNIT_TEST(test_from_response_sending_to_confirmation_received)
+{
+  sixp_pkt_t pkt;
+  linkaddr_t peer_addr;
+  sixp_trans_t *trans;
+  uint8_t req_body[8];
+
+  UNIT_TEST_BEGIN();
+  test_setup();
+
+  /* allocate a transaction for the add request */
+  memset(&pkt, 0, sizeof(pkt));
+  memset(&peer_addr, 0, sizeof(peer_addr));
+  memset(req_body, 0, sizeof(req_body));
+
+  pkt.sfid = TEST_SF_SFID;
+  pkt.type = SIXP_PKT_TYPE_REQUEST;
+  pkt.code = (sixp_pkt_code_t)(uint8_t)SIXP_PKT_CMD_ADD;
+  pkt.seqno = 10;
+  pkt.body = req_body;
+  pkt.body_len = 4; /* Metadata, CellOptions, and NumCells CellList */
+  /* 3-step */
+  UNIT_TEST_ASSERT((trans = sixp_trans_alloc(&pkt, &peer_addr)) != NULL);
+
+  /* change the state of the transaction to RESPONSE SENDING */
+  UNIT_TEST_ASSERT(sixp_trans_get_state(trans) == SIXP_TRANS_STATE_INIT);
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_REQUEST_RECEIVED) == 0);
+  UNIT_TEST_ASSERT(sixp_trans_get_state(trans) == SIXP_TRANS_STATE_REQUEST_RECEIVED);
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans, SIXP_TRANS_STATE_RESPONSE_SENDING) == 0);
+  UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
+                   SIXP_TRANS_STATE_RESPONSE_SENDING);
+
+  /* change its state to CONFIRMATION_RECEIVED without visiting RESPONSE_SENT */
+  UNIT_TEST_ASSERT(
+    sixp_trans_transit_state(trans,
+                             SIXP_TRANS_STATE_CONFIRMATION_RECEIVED) == 0);
+  UNIT_TEST_ASSERT(sixp_trans_get_state(trans) ==
+                   SIXP_TRANS_STATE_CONFIRMATION_RECEIVED);
+
+  UNIT_TEST_END();
+}
+
+UNIT_TEST_REGISTER(test_next_seqno_increment_on_request_sent,
+                   "test next_seqno is incremented on request_sent");
+UNIT_TEST(test_next_seqno_increment_on_request_sent)
+{
+  linkaddr_t peer_addr;
+  sixp_nbr_t *nbr;
+  sixp_trans_t *trans;
+
+  UNIT_TEST_BEGIN();
+
+  test_setup();
+
+  peer_addr.u8[0] = 1;
+
+  UNIT_TEST_ASSERT((nbr = sixp_nbr_alloc(&peer_addr)) != NULL);
+  UNIT_TEST_ASSERT(sixp_nbr_set_next_seqno(nbr, 10) == 0);
+  UNIT_TEST_ASSERT(sixp_nbr_get_next_seqno(nbr) == 10);
+
+  UNIT_TEST_ASSERT(sixp_output(SIXP_PKT_TYPE_REQUEST,
+                               (sixp_pkt_code_t)(uint8_t)SIXP_PKT_CMD_ADD,
+                               TEST_SF_SFID, NULL, 0, &peer_addr,
+                               NULL, NULL, 0) == 0);
+  /* next_seqno should be updated by sixp_output() */
+  UNIT_TEST_ASSERT((trans = sixp_trans_find(&peer_addr)) != NULL);
+  UNIT_TEST_ASSERT(sixp_nbr_get_next_seqno(nbr) == 11);
+  UNIT_TEST_ASSERT(sixp_trans_transit_state(trans,
+                                            SIXP_TRANS_STATE_REQUEST_SENT)
+                   == 0);
+  UNIT_TEST_ASSERT(sixp_nbr_get_next_seqno(nbr) == 11);
+
+  UNIT_TEST_END();
+}
+
+UNIT_TEST_REGISTER(test_next_seqno_increment_on_response_sent,
+                   "test next_seqno is incremented on response_sent");
+UNIT_TEST(test_next_seqno_increment_on_response_sent)
+{
+  linkaddr_t peer_addr;
+  sixp_nbr_t *nbr;
+  sixp_trans_t *trans;
+  uint32_t body;
+
+  UNIT_TEST_BEGIN();
+
+  test_setup();
+
+  peer_addr.u8[0] = 1;
+  UNIT_TEST_ASSERT((nbr = sixp_nbr_alloc(&peer_addr)) != NULL);
+  UNIT_TEST_ASSERT(sixp_nbr_set_next_seqno(nbr, 100) == 0);
+  UNIT_TEST_ASSERT(sixp_nbr_get_next_seqno(nbr) == 100);
+
+  UNIT_TEST_ASSERT(sixp_pkt_create(SIXP_PKT_TYPE_REQUEST,
+                                   (sixp_pkt_code_t)(uint8_t)SIXP_PKT_CMD_ADD,
+                                   TEST_SF_SFID, 10,
+                                   (const uint8_t *)&body, sizeof(body), NULL)
+                   == 0);
+
+  UNIT_TEST_ASSERT((trans = sixp_trans_find(&peer_addr)) == NULL);
+  sixp_input(packetbuf_hdrptr(), packetbuf_totlen(), &peer_addr);
+  UNIT_TEST_ASSERT((trans = sixp_trans_find(&peer_addr)) != NULL);
+  /* next_seqno must not be changed yet */
+  UNIT_TEST_ASSERT(sixp_nbr_get_next_seqno(nbr) == 100);
+  UNIT_TEST_ASSERT(sixp_output(SIXP_PKT_TYPE_RESPONSE,
+                               (sixp_pkt_code_t)(uint8_t)SIXP_PKT_RC_SUCCESS,
+                               TEST_SF_SFID, NULL, 0, &peer_addr,
+                               NULL, NULL, 0) == 0);
+  UNIT_TEST_ASSERT(sixp_trans_transit_state(trans,
+                                            SIXP_TRANS_STATE_RESPONSE_SENT)
+                   == 0);
+  /*
+   * next_seqno is overridden by the seqno of the request and
+   * incremented by 1
+   */
+  UNIT_TEST_ASSERT(sixp_nbr_get_next_seqno(nbr) == 11);
 
   UNIT_TEST_END();
 }
@@ -1115,6 +1314,14 @@ PROCESS_THREAD(test_process, ev, data)
   UNIT_TEST_RUN(test_state_transition_3_step_responder);
   UNIT_TEST_RUN(test_state_transition_invalid_transition_initiator);
   UNIT_TEST_RUN(test_state_transition_invalid_transition_responder);
+
+  /* state transition from xxx_sending to yyy_received */
+  UNIT_TEST_RUN(test_from_request_sending_to_response_received);
+  UNIT_TEST_RUN(test_from_response_sending_to_confirmation_received);
+
+  /* seqno management*/
+  UNIT_TEST_RUN(test_next_seqno_increment_on_request_sent);
+  UNIT_TEST_RUN(test_next_seqno_increment_on_response_sent);
 
   printf("=check-me= DONE\n");
   PROCESS_END();
