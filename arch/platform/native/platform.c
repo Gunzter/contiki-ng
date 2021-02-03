@@ -56,6 +56,9 @@
 #include "net/netstack.h"
 
 #include "dev/serial-line.h"
+#include "dev/button-hal.h"
+#include "dev/gpio-hal.h"
+#include "dev/leds.h"
 
 #include "net/ipv6/uip.h"
 #include "net/ipv6/uip-debug.h"
@@ -111,10 +114,12 @@
 static const struct select_callback *select_callback[SELECT_MAX];
 static int select_max = 0;
 
-static uint8_t serial_id[] = {0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08};
-#if !NETSTACK_CONF_WITH_IPV6
-static uint16_t node_id = 0x0102;
-#endif /* !NETSTACK_CONF_WITH_IPV6 */
+#ifdef PLATFORM_CONF_MAC_ADDR
+static uint8_t mac_addr[] = PLATFORM_CONF_MAC_ADDR;
+#else /* PLATFORM_CONF_MAC_ADDR */
+static uint8_t mac_addr[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+#endif /* PLATFORM_CONF_MAC_ADDR */
+
 /*---------------------------------------------------------------------------*/
 int
 select_set_callback(int fd, const struct select_callback *callback)
@@ -155,13 +160,20 @@ stdin_set_fd(fd_set *rset, fd_set *wset)
   FD_SET(STDIN_FILENO, rset);
   return 1;
 }
+static int (*input_handler)(unsigned char c);
+
+void
+native_uart_set_input(int (*input)(unsigned char c))
+{
+  input_handler = input;
+}
 static void
 stdin_handle_fd(fd_set *rset, fd_set *wset)
 {
   char c;
   if(FD_ISSET(STDIN_FILENO, rset)) {
     if(read(STDIN_FILENO, &c, 1) > 0) {
-      serial_line_input_byte(c);
+      input_handler(c);
     }
   }
 }
@@ -177,16 +189,11 @@ set_lladdr(void)
 
   memset(&addr, 0, sizeof(linkaddr_t));
 #if NETSTACK_CONF_WITH_IPV6
-  memcpy(addr.u8, serial_id, sizeof(addr.u8));
+  memcpy(addr.u8, mac_addr, sizeof(addr.u8));
 #else
-  if(node_id == 0) {
-    int i;
-    for(i = 0; i < sizeof(linkaddr_t); ++i) {
-      addr.u8[i] = serial_id[7 - i];
-    }
-  } else {
-    addr.u8[0] = node_id & 0xff;
-    addr.u8[1] = node_id >> 8;
+  int i;
+  for(i = 0; i < sizeof(linkaddr_t); ++i) {
+    addr.u8[i] = mac_addr[7 - i];
   }
 #endif
   linkaddr_set_node_addr(&addr);
@@ -196,16 +203,13 @@ set_lladdr(void)
 static void
 set_global_address(void)
 {
-  static uip_ipaddr_t ipaddr;
-  static uip_ipaddr_t *prefix = NULL;
+  uip_ipaddr_t ipaddr;
+  const uip_ipaddr_t *default_prefix = uip_ds6_default_prefix();
 
   /* Assign a unique local address (RFC4193,
      http://tools.ietf.org/html/rfc4193). */
-  if(prefix == NULL) {
-    uip_ip6addr(&ipaddr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0);
-  } else {
-    memcpy(&ipaddr, prefix, 8);
-  }
+  uip_ip6addr_copy(&ipaddr, default_prefix);
+
   /* Assumes that the uip_lladdr is set */
   uip_ds6_set_addr_iid(&ipaddr, &uip_lladdr);
   uip_ds6_addr_add(&ipaddr, 0, ADDR_AUTOCONF);
@@ -215,7 +219,8 @@ set_global_address(void)
   LOG_INFO_("\n");
 
   /* set the PREFIX::1 address to the IF */
-  uip_ip6addr(&ipaddr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 1);
+  uip_ip6addr_copy(&ipaddr, default_prefix);
+  ipaddr.u8[15] = 1;
   uip_ds6_defrt_add(&ipaddr, 0);
 }
 #endif
@@ -224,7 +229,7 @@ int contiki_argc = 0;
 char **contiki_argv;
 /*---------------------------------------------------------------------------*/
 void
-platform_process_args(int argc, char**argv)
+platform_process_args(int argc, char **argv)
 {
   /* crappy way of remembering and accessing argc/v */
   contiki_argc = argc;
@@ -246,6 +251,9 @@ platform_process_args(int argc, char**argv)
 void
 platform_init_stage_one()
 {
+  gpio_hal_init();
+  button_hal_init();
+  leds_init();
   return;
 }
 /*---------------------------------------------------------------------------*/
@@ -254,6 +262,12 @@ platform_init_stage_two()
 {
   set_lladdr();
   serial_line_init();
+
+#if SELECT_STDIN
+  if(NULL == input_handler) {
+    native_uart_set_input(serial_line_input_byte);
+  }
+#endif
 }
 /*---------------------------------------------------------------------------*/
 void
@@ -288,8 +302,8 @@ platform_main_loop()
 
     retval = process_run();
 
-    tv.tv_sec = 0;
-    tv.tv_usec = retval ? 1 : SELECT_TIMEOUT;
+    tv.tv_sec = retval ? 0 : SELECT_TIMEOUT / 1000;
+    tv.tv_usec = retval ? 1 : (SELECT_TIMEOUT * 1000) % 1000000;
 
     FD_ZERO(&fdr);
     FD_ZERO(&fdw);

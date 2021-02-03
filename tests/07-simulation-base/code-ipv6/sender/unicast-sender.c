@@ -1,8 +1,7 @@
 #include "contiki.h"
 #include "contiki-lib.h"
 #include "contiki-net.h"
-#include "rpl.h"
-#include "rpl-dag-root.h"
+#include "net/routing/routing.h"
 
 #include <stdio.h>
 
@@ -36,12 +35,11 @@ receiver(struct simple_udp_connection *c,
 PROCESS_THREAD(udp_process, ev, data)
 {
   static struct etimer periodic_timer;
-  static struct etimer send_timer;
   uip_ipaddr_t addr;
 
   PROCESS_BEGIN();
 
-  rpl_dag_root_init_dag_immediately();
+  NETSTACK_ROUTING.root_start();
 
   simple_udp_register(&broadcast_connection, UDP_PORT,
                       NULL, UDP_PORT,
@@ -52,12 +50,15 @@ PROCESS_THREAD(udp_process, ev, data)
   etimer_set(&periodic_timer, SEND_INTERVAL);
 
   while(1) {
+    const uip_ipaddr_t *default_prefix;
     uint8_t buf[SIZE];
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
     etimer_reset(&periodic_timer);
 
     printf("Sending unicast\n");
-    uip_ip6addr(&addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 2);
+    default_prefix = uip_ds6_default_prefix();
+    uip_ip6addr_copy(&addr, default_prefix);
+    addr.u16[7] = UIP_HTONS(2);
     simple_udp_sendto(&broadcast_connection, buf, sizeof(buf), &addr);
   }
 

@@ -30,10 +30,13 @@
 
 #include <contiki.h>
 #include <lib/assert.h>
-#include <sys/node-id.h>
 #include <net/mac/tsch/tsch.h>
 #include <net/mac/tsch/tsch-queue.h>
 #include <net/mac/tsch/sixtop/sixtop.h>
+
+/* Hard-coded MAC address of the TSCH coordinator */
+static linkaddr_t coordinator_addr =  {{ 0x00, 0x01, 0x00, 0x01,
+                                         0x00, 0x01, 0x00, 0x01 }};
 
 extern const sixtop_sf_t test_sf;
 extern int test_sf_start(const linkaddr_t *addr);
@@ -41,15 +44,13 @@ extern int test_sf_start(const linkaddr_t *addr);
 PROCESS(sixp_node_process, "6P node");
 AUTOSTART_PROCESSES(&sixp_node_process);
 
-#define COORDINATOR_NODE_ID 1
-
 PROCESS_THREAD(sixp_node_process, ev, data)
 {
   PROCESS_BEGIN();
 
   sixtop_add_sf(&test_sf);
 
-  if(node_id == COORDINATOR_NODE_ID) {
+  if(linkaddr_cmp(&coordinator_addr, &linkaddr_node_addr)) {
     tsch_set_coordinator(1);
     assert(test_sf_start(NULL) == 0);
   } else {
@@ -61,7 +62,7 @@ PROCESS_THREAD(sixp_node_process, ev, data)
       etimer_reset(&et);
     }
     peer = tsch_queue_get_time_source();
-    assert(test_sf_start((const linkaddr_t *)&peer->addr) == 0);
+    assert(test_sf_start(tsch_queue_get_nbr_address(peer)) == 0);
   }
 
   PROCESS_END();

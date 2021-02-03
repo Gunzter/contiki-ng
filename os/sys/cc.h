@@ -106,6 +106,16 @@
 #endif /* CC_CONF_INLINE */
 
 /**
+ * Configure if the C compiler supports functions that are not meant to return
+ * e.g. with __attribute__((__noreturn__))
+ */
+#ifdef CC_CONF_NORETURN
+#define CC_NORETURN CC_CONF_NORETURN
+#else
+#define CC_NORETURN
+#endif /* CC_CONF_NORETURN */
+
+/**
  * Configure if the C compiler supports the assignment of struct value.
  */
 #ifdef CC_CONF_ASSIGN_AGGREGATE
@@ -161,5 +171,18 @@
  */
 #define CC_CONCAT3(s1, s2, s3) s1##s2##s3
 #define CC_CONCAT_EXT_3(s1, s2, s3) CC_CONCAT3(s1, s2, s3)
+
+/**
+ * A C preprocessing macro to obtain the length of a C array.
+ */
+#define CC_ARRAY_SIZE(a) (sizeof(a)/sizeof(*(a)))
+
+/**
+ * A C preprocessing macro to obtain size of a field in a struct.
+ */
+#define CC_FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
+
+#define CC_STRINGIFY_IMPL(s) #s
+#define CC_STRINGIFY(s) CC_STRINGIFY_IMPL(s)
 
 #endif /* CC_H_ */

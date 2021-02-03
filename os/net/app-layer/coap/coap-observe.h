@@ -48,8 +48,6 @@
 #include "coap-transactions.h"
 #include "coap-engine.h"
 
-#define COAP_OBSERVER_URL_LEN 20
-
 typedef struct coap_observer {
   struct coap_observer *next;   /* for LIST */
 
@@ -79,6 +77,8 @@ void coap_notify_observers_sub(coap_resource_t *resource, const char *subpath);
 
 void coap_observe_handler(coap_resource_t *resource, coap_message_t *request,
                           coap_message_t *response);
+
+uint8_t coap_has_observers(char *path);
 
 #endif /* COAP_OBSERVE_H_ */
 /** @} */

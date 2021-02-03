@@ -47,6 +47,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <inttypes.h>
 /*---------------------------------------------------------------------------*/
 /* Include Project Specific conf */
 #ifdef PROJECT_CONF_PATH
@@ -54,6 +55,25 @@
 #endif /* PROJECT_CONF_PATH */
 /*---------------------------------------------------------------------------*/
 #include "cc2538-def.h"
+
+unsigned radio_phy_overhead(void);
+unsigned radio_byte_air_time(void);
+unsigned radio_delay_before_tx(void);
+unsigned radio_delay_before_rx(void);
+unsigned radio_delay_before_detect(void);
+uint16_t *radio_tsch_timeslot_timing(void);
+
+/** @} */
+/*---------------------------------------------------------------------------*/
+
+#define RADIO_PHY_OVERHEAD        radio_phy_overhead()
+#define RADIO_BYTE_AIR_TIME       radio_byte_air_time()
+#define RADIO_DELAY_BEFORE_TX     radio_delay_before_tx()
+#define RADIO_DELAY_BEFORE_RX     radio_delay_before_rx()
+#define RADIO_DELAY_BEFORE_DETECT radio_delay_before_detect()
+
+#define TSCH_CONF_DEFAULT_TIMESLOT_TIMING   radio_tsch_timeslot_timing()
+
 /*---------------------------------------------------------------------------*/
 /**
  * \name Serial Boot Loader Backdoor configuration
@@ -85,24 +105,30 @@
 /*---------------------------------------------------------------------------*/
 /* board.h assumes that basic configuration is done */
 #include "board.h"
+
+#define PLATFORM_SUPPORTS_BUTTON_HAL PLATFORM_HAS_BUTTON
 /*---------------------------------------------------------------------------*/
 /**
  * \name Radio Configuration
  *
  * @{
  */
-/* Configure CSMA for when it's selected */
+#ifndef ZOUL_CONF_USE_CC1200_RADIO
+#define ZOUL_CONF_USE_CC1200_RADIO 0
+#endif
 
-#if CC1200_CONF_SUBGHZ_50KBPS_MODE
-#define NETSTACK_CONF_RADIO                                 cc1200_driver
-#define CC1200_CONF_RF_CFG                                  cc1200_802154g_863_870_fsk_50kbps
-#define ANTENNA_SW_SELECT_DEF_CONF                          ANTENNA_SW_SELECT_SUBGHZ
-#define CC1200_CONF_USE_GPIO2                               0
-#define CC1200_CONF_USE_RX_WATCHDOG                         0
+#if ZOUL_CONF_USE_CC1200_RADIO
+#define NETSTACK_CONF_RADIO                           cc1200_driver
+#define ANTENNA_SW_SELECT_DEF_CONF                    ANTENNA_SW_SELECT_SUBGHZ
+#define CC1200_CONF_USE_GPIO2                         0
+#define CC1200_CONF_USE_RX_WATCHDOG                   0
 
-#define CSMA_CONF_ACK_WAIT_TIME                          (RTIMER_SECOND / 200)
-#define CSMA_CONF_AFTER_ACK_DETECTED_WAIT_TIME           (RTIMER_SECOND / 1500)
+#define CSMA_CONF_ACK_WAIT_TIME                       (RTIMER_SECOND / 200)
+#define CSMA_CONF_AFTER_ACK_DETECTED_WAIT_TIME        (RTIMER_SECOND / 1500)
 
+#ifndef CC1200_CONF_RF_CFG
+#define CC1200_CONF_RF_CFG                   cc1200_802154g_863_870_fsk_50kbps
+#endif
 #endif
 
 /* This can be overriden to use the cc1200_driver instead */

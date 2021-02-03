@@ -37,7 +37,7 @@
  *         Simon Duquennoy <simon.duquennoy@inria.fr>
  */
 
-/** \addtogroup apps
+/** \addtogroup shell
  * @{ */
 
 #ifndef _SHELL_COMMANDS_H_
@@ -53,8 +53,14 @@ struct shell_command_t {
   const char *help;
 };
 
-/* The set of supported commands */
-extern struct shell_command_t shell_commands[];
+struct shell_command_set_t {
+  struct shell_command_set_t *next;
+  const struct shell_command_t *const commands;
+};
+
+void shell_command_set_register(struct shell_command_set_t *);
+int shell_command_set_deregister(struct shell_command_set_t *);
+const struct shell_command_t *shell_command_lookup(const char *);
 
 /**
  * Initializes Shell-commands module

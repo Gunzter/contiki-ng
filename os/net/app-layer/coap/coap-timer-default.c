@@ -52,7 +52,7 @@
 
 /* Log configuration */
 #include "coap-log.h"
-#define LOG_MODULE "coap-timer-default"
+#define LOG_MODULE "coap-timer"
 #define LOG_LEVEL  LOG_LEVEL_NONE
 
 PROCESS(coap_timer_process, "coap timer process");
@@ -102,10 +102,10 @@ PROCESS_THREAD(coap_timer_process, ev, data)
   PROCESS_END();
 }
 /*---------------------------------------------------------------------------*/
+static clock_time_t last;
 static uint64_t
 uptime(void)
 {
-  static clock_time_t last;
   clock_time_t now;
   uint64_t diff;
 

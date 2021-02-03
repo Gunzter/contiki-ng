@@ -46,10 +46,6 @@
 #include "contiki.h"
 #include "net/packetbuf.h"
 #include "net/mac/tsch/tsch.h"
-#include "net/mac/tsch/tsch-packet.h"
-#include "net/mac/tsch/tsch-private.h"
-#include "net/mac/tsch/tsch-schedule.h"
-#include "net/mac/tsch/tsch-security.h"
 #include "net/mac/framer/frame802154.h"
 #include "net/mac/framer/framer-802154.h"
 #include "net/netstack.h"
@@ -74,12 +70,15 @@
  */
 static struct packetbuf_attr eackbuf_attrs[PACKETBUF_NUM_ATTRS];
 
+/* The offset of the frame pending bit flag within the first byte of FCF */
+#define IEEE802154_FRAME_PENDING_BIT_OFFSET 4
+
 /*---------------------------------------------------------------------------*/
-static int
+void
 tsch_packet_eackbuf_set_attr(uint8_t type, const packetbuf_attr_t val)
 {
   eackbuf_attrs[type].val = val;
-  return 1;
+  return;
 }
 /*---------------------------------------------------------------------------*/
 /* Return the value of a specified attribute */
@@ -125,14 +124,7 @@ tsch_packet_create_eack(uint8_t *buf, uint16_t buf_len,
 #endif
 
 #if LLSEC802154_ENABLED
-  if(tsch_is_pan_secured) {
-    tsch_packet_eackbuf_set_attr(PACKETBUF_ATTR_SECURITY_LEVEL,
-                                 TSCH_SECURITY_KEY_SEC_LEVEL_ACK);
-    tsch_packet_eackbuf_set_attr(PACKETBUF_ATTR_KEY_ID_MODE,
-                                 FRAME802154_1_BYTE_KEY_ID_MODE);
-    tsch_packet_eackbuf_set_attr(PACKETBUF_ATTR_KEY_INDEX,
-                                 TSCH_SECURITY_KEY_INDEX_ACK);
-  }
+  tsch_security_set_packetbuf_attr(FRAME802154_ACKFRAME);
 #endif /* LLSEC802154_ENABLED */
 
   framer_802154_setup_params(tsch_packet_eackbuf_attr, 0, &params);
@@ -261,9 +253,9 @@ tsch_packet_create_eb(uint8_t *hdr_len, uint8_t *tsch_sync_ie_offset)
   /* Add Slotframe and Link IE */
 #if TSCH_PACKET_EB_WITH_SLOTFRAME_AND_LINK
   {
-    /* Send slotframe 0 with link at timeslot 0 */
+    /* Send slotframe 0 with link at timeslot 0 and channel offset 0 */
     struct tsch_slotframe *sf0 = tsch_schedule_get_slotframe_by_handle(0);
-    struct tsch_link *link0 = tsch_schedule_get_link_by_timeslot(sf0, 0);
+    struct tsch_link *link0 = tsch_schedule_get_link_by_timeslot(sf0, 0, 0);
     if(sf0 && link0) {
       ies.ie_tsch_slotframe_and_link.num_slotframes = 1;
       ies.ie_tsch_slotframe_and_link.slotframe_handle = sf0->handle;
@@ -357,14 +349,7 @@ tsch_packet_create_eb(uint8_t *hdr_len, uint8_t *tsch_sync_ie_offset)
   packetbuf_set_addr(PACKETBUF_ADDR_RECEIVER, &tsch_eb_address);
 
 #if LLSEC802154_ENABLED
-  if(tsch_is_pan_secured) {
-    packetbuf_set_attr(PACKETBUF_ATTR_SECURITY_LEVEL,
-                       TSCH_SECURITY_KEY_SEC_LEVEL_EB);
-    packetbuf_set_attr(PACKETBUF_ATTR_KEY_ID_MODE,
-                       FRAME802154_1_BYTE_KEY_ID_MODE);
-    packetbuf_set_attr(PACKETBUF_ATTR_KEY_INDEX,
-                       TSCH_SECURITY_KEY_INDEX_EB);
-  }
+  tsch_security_set_packetbuf_attr(FRAME802154_BEACONFRAME);
 #endif /* LLSEC802154_ENABLED */
 
   if(NETSTACK_FRAMER.create() < 0) {
@@ -394,8 +379,7 @@ tsch_packet_update_eb(uint8_t *buf, int buf_size, uint8_t tsch_sync_ie_offset)
   struct ieee802154_ies ies;
   ies.ie_asn = tsch_current_asn;
   ies.ie_join_priority = tsch_join_priority;
-  frame80215e_create_ie_tsch_synchronization(buf+tsch_sync_ie_offset, buf_size-tsch_sync_ie_offset, &ies);
-  return 1;
+  return frame80215e_create_ie_tsch_synchronization(buf+tsch_sync_ie_offset, buf_size-tsch_sync_ie_offset, &ies) != -1;
 }
 /*---------------------------------------------------------------------------*/
 /* Parse a IEEE 802.15.4e TSCH Enhanced Beacon (EB) */
@@ -418,7 +402,8 @@ tsch_packet_parse_eb(const uint8_t *buf, int buf_size,
 
   if(frame->fcf.frame_version < FRAME802154_IEEE802154_2015
      || frame->fcf.frame_type != FRAME802154_BEACONFRAME) {
-    LOG_INFO("! parse_eb: frame is not a valid TSCH beacon. Frame version %u, type %u, FCF %02x %02x\n",
+    LOG_INFO("! parse_eb: frame is not a TSCH beacon." \
+           " Frame version %u, type %u, FCF %02x %02x\n",
            frame->fcf.frame_version, frame->fcf.frame_type, buf[0], buf[1]);
     LOG_INFO("! parse_eb: frame was from 0x%x/", frame->src_pid);
     LOG_INFO_LLADDR((const linkaddr_t *)&frame->src_addr);
@@ -462,6 +447,20 @@ tsch_packet_parse_eb(const uint8_t *buf, int buf_size,
   }
 
   return curr_len;
+}
+/*---------------------------------------------------------------------------*/
+/* Set frame pending bit in a packet (whose header was already build) */
+void
+tsch_packet_set_frame_pending(uint8_t *buf, int buf_size)
+{
+  buf[0] |= (1 << IEEE802154_FRAME_PENDING_BIT_OFFSET);
+}
+/*---------------------------------------------------------------------------*/
+/* Get frame pending bit from a packet */
+int
+tsch_packet_get_frame_pending(uint8_t *buf, int buf_size)
+{
+  return (buf[0] >> IEEE802154_FRAME_PENDING_BIT_OFFSET) & 1;
 }
 /*---------------------------------------------------------------------------*/
 /** @} */

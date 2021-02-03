@@ -99,11 +99,10 @@ sensors_find(const char *prefix)
   return NULL;
 }
 /*---------------------------------------------------------------------------*/
+static int i;
+static int events;
 PROCESS_THREAD(sensors_process, ev, data)
 {
-  static int i;
-  static int events;
-
   PROCESS_BEGIN();
 
   sensors_event = process_alloc_event();

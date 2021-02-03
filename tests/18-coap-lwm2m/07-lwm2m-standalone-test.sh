@@ -1,18 +1,21 @@
 #!/bin/bash
+source ../utils.sh
 
 # Contiki directory
 CONTIKI=$1
 # Test basename
 BASENAME=07-lwm2m-standalone-test
 
-git clone https://github.com/contiki-ng/example-lwm2m-standalone.git
 # Building standalone posix example
-make -C example-lwm2m-standalone/lwm2m > make.log 2> make.err
+echo "Compiling standalone posix example"
+make CONTIKI_NG=../../$CONTIKI -C example-lwm2m-standalone/lwm2m clean >/dev/null
+make CONTIKI_NG=../../$CONTIKI -C example-lwm2m-standalone/lwm2m >make.log 2>make.err
 
 echo "Downloading leshan"
-wget -nc https://joakimeriksson.github.io/resources/leshan-server-demo-1.0.0-SNAPSHOT-jar-with-dependencies.jar
+LESHAN_JAR=leshan-server-demo-1.0.0-SNAPSHOT-jar-with-dependencies.jar
+wget -nc https://joakimeriksson.github.io/resources/$LESHAN_JAR
 echo "Starting leshan server"
-java -jar leshan-server-demo-1.0.0-SNAPSHOT-jar-with-dependencies.jar  -lp 5686 -slp 5687 >leshan.log 2>leshan.err &
+java -jar $LESHAN_JAR -lp 5686 -slp 5687 >leshan.log 2>leshan.err &
 LESHID=$!
 
 echo "Starting lwm2m standalone example"
@@ -20,15 +23,23 @@ example-lwm2m-standalone/lwm2m/lwm2m-example coap://127.0.0.1:5686 > node.log 2>
 
 CPID=$!
 
-sleep 50
+COUNTER=10
+while [ $COUNTER -gt 0 ]; do
+    sleep 5
+    if grep -q 'OK' leshan.err ; then
+        echo OK with $COUNTER
+        break
+    fi
+    let COUNTER-=1
+done
 
-echo "Closing native node"
+echo "Closing standalone example"
 sleep 1
-pgrep ipso | sudo xargs kill -9
+kill_bg $CPID
 
 echo "Closing leshan"
 sleep 1
-pgrep java | sudo xargs kill -9
+kill_bg $LESHID
 
 
 if grep -q 'OK' leshan.err ; then

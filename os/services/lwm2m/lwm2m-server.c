@@ -51,7 +51,7 @@
 
 /* Log configuration */
 #include "coap-log.h"
-#define LOG_MODULE "lwm2m-server"
+#define LOG_MODULE "lwm2m-srv"
 #define LOG_LEVEL  LOG_LEVEL_LWM2M
 
 #define MAX_COUNT LWM2M_SERVER_MAX_COUNT
@@ -221,7 +221,7 @@ lwm2m_callback(lwm2m_object_instance_t *object,
   } else if(ctx->operation == LWM2M_OP_EXECUTE) {
     switch(ctx->resource_id) {
     case LWM2M_SERVER_REG_UPDATE_TRIGGER_ID:
-      lwm2m_rd_client_update_triggered();
+      lwm2m_rd_client_update_triggered(ctx->request->src_ep);
       break;
     }
   } else {

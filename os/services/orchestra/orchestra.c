@@ -40,13 +40,17 @@
 #include "orchestra.h"
 #include "net/packetbuf.h"
 #include "net/ipv6/uip-icmp6.h"
-#include "rpl.h"
-#if UIP_CONF_IPV6_RPL_LITE == 0
-#include "rpl-private.h"
-#endif /* UIP_CONF_IPV6_RPL_LITE == 0 */
+#include "net/routing/routing.h"
+#if ROUTING_CONF_RPL_LITE
+#include "net/routing/rpl-lite/rpl.h"
+#elif ROUTING_CONF_RPL_CLASSIC
+#include "net/routing/rpl-classic/rpl.h"
+#include "net/routing/rpl-classic/rpl-private.h"
+#endif
 
-#define DEBUG DEBUG_PRINT
-#include "net/ipv6/uip-debug.h"
+#include "sys/log.h"
+#define LOG_MODULE "Orchestra"
+#define LOG_LEVEL  LOG_LEVEL_MAC
 
 /* A net-layer sniffer for packets sent and received */
 static void orchestra_packet_received(void);
@@ -107,18 +111,24 @@ orchestra_callback_child_removed(const linkaddr_t *addr)
   }
 }
 /*---------------------------------------------------------------------------*/
-void
+int
 orchestra_callback_packet_ready(void)
 {
   int i;
   /* By default, use any slotframe, any timeslot */
-  uint16_t slotframe = 9;
+  uint16_t slotframe = 0xffff;
   uint16_t timeslot = 0xffff;
+  /* The default channel offset 0xffff means that the channel offset in the scheduled
+   * tsch_link structure is used instead. Any other value specified in the packetbuf
+   * overrides per-link value, allowing to implement multi-channel Orchestra. */
+  uint16_t channel_offset = 0xffff;
+  int matched_rule = -1;
 
   /* Loop over all rules until finding one able to handle the packet */
   for(i = 0; i < NUM_RULES; i++) {
     if(all_rules[i]->select_packet != NULL) {
-      if(all_rules[i]->select_packet(&slotframe, &timeslot)) {
+      if(all_rules[i]->select_packet(&slotframe, &timeslot, &channel_offset)) {
+        matched_rule = i;
         break;
       }
     }
@@ -127,7 +137,10 @@ orchestra_callback_packet_ready(void)
 #if TSCH_WITH_LINK_SELECTOR
   packetbuf_set_attr(PACKETBUF_ATTR_TSCH_SLOTFRAME, slotframe);
   packetbuf_set_attr(PACKETBUF_ATTR_TSCH_TIMESLOT, timeslot);
+  packetbuf_set_attr(PACKETBUF_ATTR_TSCH_CHANNEL_OFFSET, channel_offset);
 #endif
+
+  return matched_rule;
 }
 /*---------------------------------------------------------------------------*/
 void
@@ -159,10 +172,10 @@ orchestra_init(void)
   linkaddr_copy(&orchestra_parent_linkaddr, &linkaddr_null);
   /* Initialize all Orchestra rules */
   for(i = 0; i < NUM_RULES; i++) {
+    LOG_INFO("Initializing rule %s (%u), size %d\n", all_rules[i]->name, i, all_rules[i]->slotframe_size);
     if(all_rules[i]->init != NULL) {
-      PRINTF("Orchestra: initializing rule %u\n", i);
       all_rules[i]->init(i);
     }
   }
-  PRINTF("Orchestra: initialization done\n");
+  LOG_INFO("Initialization done\n");
 }

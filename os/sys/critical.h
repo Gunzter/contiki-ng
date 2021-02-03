@@ -62,7 +62,7 @@
  * critical_exit().
  */
 static inline int_master_status_t
-critical_enter()
+critical_enter(void)
 {
   int_master_status_t status = int_master_read_and_disable();
   memory_barrier();

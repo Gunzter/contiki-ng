@@ -92,7 +92,7 @@ typedef enum {
 /** \name Neighbor tables: register and loop through table elements */
 /** @{ */
 int nbr_table_register(nbr_table_t *table, nbr_table_callback *callback);
-int nbr_table_is_register(nbr_table_t *table);
+int nbr_table_is_registered(nbr_table_t *table);
 nbr_table_item_t *nbr_table_head(nbr_table_t *table);
 nbr_table_item_t *nbr_table_next(nbr_table_t *table, nbr_table_item_t *item);
 /** @} */
@@ -113,7 +113,6 @@ int nbr_table_unlock(nbr_table_t *table, nbr_table_item_t *item);
 /** \name Neighbor tables: address manipulation */
 /** @{ */
 linkaddr_t *nbr_table_get_lladdr(nbr_table_t *table, const nbr_table_item_t *item);
-int nbr_table_update_lladdr(const linkaddr_t *old_addr, const linkaddr_t *new_addr, int remove_if_duplicate);
 /** @} */
 
 #endif /* NBR_TABLE_H_ */

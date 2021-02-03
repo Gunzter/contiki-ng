@@ -48,7 +48,7 @@
 /*---------------------------------------------------------------------------*/
 uint8_t
 ecc_mul_start(uint32_t *scalar, ec_point_t *ec_point,
-              ecc_curve_info_t *curve, uint32_t *result_vector,
+              const ecc_curve_info_t *curve, uint32_t *result_vector,
               struct process *process)
 {
 
@@ -220,7 +220,7 @@ ecc_mul_get_result(ec_point_t *ec_point,
 }
 /*---------------------------------------------------------------------------*/
 uint8_t
-ecc_mul_gen_pt_start(uint32_t *scalar, ecc_curve_info_t *curve,
+ecc_mul_gen_pt_start(uint32_t *scalar, const ecc_curve_info_t *curve,
                      uint32_t *result_vector, struct process *process)
 {
   uint8_t extraBuf;
@@ -389,7 +389,7 @@ ecc_mul_gen_pt_get_result(ec_point_t *ec_point,
 /*---------------------------------------------------------------------------*/
 uint8_t
 ecc_add_start(ec_point_t *ec_point1, ec_point_t *ec_point2,
-              ecc_curve_info_t *curve, uint32_t *result_vector,
+              const ecc_curve_info_t *curve, uint32_t *result_vector,
               struct process *process)
 {
 

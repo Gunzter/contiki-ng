@@ -45,12 +45,11 @@
 #error Change SERIAL_LINE_CONF_BUFSIZE in contiki-conf.h.
 #endif
 
-#ifndef IGNORE_CHAR
-#define IGNORE_CHAR(c) (c == 0x0d)
-#endif
-
 #ifndef END
 #define END 0x0a
+#endif
+#ifndef END2
+#define END2 0x0d
 #endif
 
 static struct ringbuf rxbuf;
@@ -61,26 +60,21 @@ PROCESS(serial_line_process, "Serial driver");
 process_event_t serial_line_event_message;
 
 /*---------------------------------------------------------------------------*/
+static uint8_t serial_line_overflow = 0; /* Buffer overflow: ignore until END */
 int
 serial_line_input_byte(unsigned char c)
 {
-  static uint8_t overflow = 0; /* Buffer overflow: ignore until END */
-  
-  if(IGNORE_CHAR(c)) {
-    return 0;
-  }
-
-  if(!overflow) {
+  if(!serial_line_overflow) {
     /* Add character */
     if(ringbuf_put(&rxbuf, c) == 0) {
       /* Buffer overflow: ignore the rest of the line */
-      overflow = 1;
+      serial_line_overflow = 1;
     }
   } else {
     /* Buffer overflowed:
      * Only (try to) add terminator characters, otherwise skip */
-    if(c == END && ringbuf_put(&rxbuf, c) != 0) {
-      overflow = 0;
+    if((c == END || c == END2) && ringbuf_put(&rxbuf, c) != 0) {
+      serial_line_overflow = 0;
     }
   }
 
@@ -89,11 +83,11 @@ serial_line_input_byte(unsigned char c)
   return 1;
 }
 /*---------------------------------------------------------------------------*/
+static char serial_buf[BUFSIZE];
+static int ptr;
+
 PROCESS_THREAD(serial_line_process, ev, data)
 {
-  static char buf[BUFSIZE];
-  static int ptr;
-
   PROCESS_BEGIN();
 
   serial_line_event_message = process_alloc_event();
@@ -107,18 +101,18 @@ PROCESS_THREAD(serial_line_process, ev, data)
       /* Buffer empty, wait for poll */
       PROCESS_YIELD();
     } else {
-      if(c != END) {
+      if((c != END && c != END2)) {
         if(ptr < BUFSIZE-1) {
-          buf[ptr++] = (uint8_t)c;
+          serial_buf[ptr++] = (uint8_t)c;
         } else {
           /* Ignore character (wait for EOL) */
         }
       } else {
         /* Terminate */
-        buf[ptr++] = (uint8_t)'\0';
+        serial_buf[ptr++] = (uint8_t)'\0';
 
         /* Broadcast event */
-        process_post(PROCESS_BROADCAST, serial_line_event_message, buf);
+        process_post(PROCESS_BROADCAST, serial_line_event_message, serial_buf);
 
         /* Wait until all processes have handled the serial line event */
         if(PROCESS_ERR_OK ==

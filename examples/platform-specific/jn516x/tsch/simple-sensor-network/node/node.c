@@ -34,18 +34,11 @@
 
 #include "contiki.h"
 #include "net/netstack.h"
-#include "net/mac/tsch/tsch-schedule.h"
 #include "net/mac/tsch/tsch.h"
-#include "net/mac/tsch/tsch-private.h"
-#include "rpl.h"
-#if UIP_CONF_IPV6_RPL_LITE == 0
-#include "rpl-private.h"
-#endif /* UIP_CONF_IPV6_RPL_LITE == 0 */
-#include "net/mac/tsch/tsch-schedule.h"
+#include "net/routing/routing.h"
 #include "net/ipv6/uip-debug.h"
 #include "lib/random.h"
-#include "rpl-tools.h"
-#include "node-id.h"
+#include "sys/node-id.h"
 #include "waveform.h"
 #include "leds.h"
 #include "net/ipv6/uiplib.h"
@@ -56,8 +49,6 @@
 
 #define DEBUG DEBUG_PRINT
 #include "net/ipv6/uip-debug.h"
-
-#define UIP_IP_BUF   ((struct uip_ip_hdr *)&uip_buf[UIP_LLH_LEN])
 
 #define INTERVAL    (10)
 #define BLINK_TIME  (CLOCK_SECOND/4)
@@ -173,12 +164,9 @@ PROCESS_THREAD(node_process, ev, data)
   is_coordinator = node_role > role_6ln;
 
   if(is_coordinator) {
-    uip_ipaddr_t prefix;
-    uip_ip6addr(&prefix, 0xbbbb, 0, 0, 0, 0, 0, 0, 0);
-    rpl_tools_init(&prefix);
-  } else {
-    rpl_tools_init(NULL);
+    NETSTACK_ROUTING.root_start();
   }
+  NETSTACK_MAC.on();
 
   /* Selected waveform depends on LS byte of MAC  */
   selected_waveform = node_mac[7] % NUMBER_OF_WAVEFORMS;
@@ -204,7 +192,7 @@ PROCESS_THREAD(node_process, ev, data)
       if (host_found) {
         /* Make sample count dependent on asn. After a disconnect, waveforms remain
            synchronous. Use node_mac to create phase offset between waveforms in different nodes */
-        sample_count = ((tsch_current_asn.ls4b/((1000/(TSCH_CONF_DEFAULT_TIMESLOT_LENGTH/1000)))/INTERVAL)+node_mac[7]) % (SIZE_OF_WAVEFORM-1);
+        sample_count = ((tsch_current_asn.ls4b/((1000/(tsch_timing_us[tsch_ts_timeslot_length]/1000)))/INTERVAL)+node_mac[7]) % (SIZE_OF_WAVEFORM-1);
         printf("%d sec. waveform=%s. cnt=%d. value=%d\n", total_time, waveform_table[selected_waveform].str, sample_count, waveform_table[selected_waveform].table[sample_count]);
         my_sprintf(udp_buf, waveform_table[selected_waveform].table[sample_count]);
         uip_udp_packet_send(udp_conn_tx, udp_buf, strlen(udp_buf));
@@ -214,10 +202,6 @@ PROCESS_THREAD(node_process, ev, data)
         printf("No host\n");
       }
       etimer_restart(&et);
-      if (total_time%60 == 0) {
-        /* Print network status once per minute */
-        print_network_status();
-      }
     }
   }
   PROCESS_END();

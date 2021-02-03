@@ -56,5 +56,19 @@ coap_log_string(const char *text, size_t len)
     LOG_OUTPUT("%c", *text);
   }
 }
+
+void
+coap_log_bytes(const uint8_t *bytes, size_t len)
+{
+  int i;
+  if(bytes == NULL) {
+    LOG_OUTPUT("(NULL PTR)");
+    return;
+  }
+
+  for(i = 0; i < len; i++) {
+    LOG_OUTPUT("%02X ", bytes[i]);
+  }
+}
 /*---------------------------------------------------------------------------*/
 /** @} */

@@ -37,7 +37,9 @@
 #ifdef PROJECT_CONF_PATH
 #include PROJECT_CONF_PATH
 #endif /* PROJECT_CONF_PATH */
-
+/*---------------------------------------------------------------------------*/
+#include "native-def.h"
+/*---------------------------------------------------------------------------*/
 #include <inttypes.h>
 #ifndef WIN32_LEAN_AND_MEAN
 #include <sys/select.h>
@@ -58,15 +60,6 @@ int select_set_callback(int fd, const struct select_callback *callback);
 #define EEPROM_CONF_SIZE				1024
 #endif
 
-#define CCIF
-#define CLIF
-
-/* These names are deprecated, use C99 names. */
-typedef uint8_t   u8_t;
-typedef uint16_t u16_t;
-typedef uint32_t u32_t;
-typedef  int32_t s32_t;
-
 typedef unsigned int uip_stats_t;
 
 #ifndef UIP_CONF_BYTE_ORDER
@@ -85,6 +78,19 @@ typedef unsigned int uip_stats_t;
 
 #define NETSTACK_CONF_LINUXRADIO_DEV "wpan0"
 
+/* configure network size and density */
+#ifndef NETSTACK_MAX_ROUTE_ENTRIES
+#define NETSTACK_MAX_ROUTE_ENTRIES   300
+#endif /* NETSTACK_MAX_ROUTE_ENTRIES */
+#ifndef NBR_TABLE_CONF_MAX_NEIGHBORS
+#define NBR_TABLE_CONF_MAX_NEIGHBORS 300
+#endif /* NBR_TABLE_CONF_MAX_NEIGHBORS */
+
+/* configure queues */
+#ifndef QUEUEBUF_CONF_NUM
+#define QUEUEBUF_CONF_NUM 64
+#endif /* QUEUEBUF_CONF_NUM */
+
 #define UIP_CONF_IPV6_QUEUE_PKT  1
 #define UIP_ARCH_IPCHKSUM        1
 
@@ -97,6 +103,8 @@ typedef unsigned long clock_time_t;
 #define CLOCK_CONF_SECOND 1000
 
 #define LOG_CONF_ENABLED 1
+
+#define PLATFORM_SUPPORTS_BUTTON_HAL 1
 
 /* Not part of C99 but actually present */
 int strcasecmp(const char*, const char*);

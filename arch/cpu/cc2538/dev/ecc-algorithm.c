@@ -75,7 +75,7 @@ PT_THREAD(ecc_multiply(ecc_multiply_state_t *state)) {
 
 PT_THREAD(ecc_dsa_sign(ecc_dsa_sign_state_t *state)) {
   /* Executed Every Time */
-  uint8_t size = state->curve_info->size;
+  const uint8_t size = state->curve_info->size;
   const uint32_t *ord = state->curve_info->n;
 
   ec_point_t point;
@@ -133,7 +133,7 @@ PT_THREAD(ecc_dsa_sign(ecc_dsa_sign_state_t *state)) {
 
 PT_THREAD(ecc_dsa_verify(ecc_dsa_verify_state_t *state)) {
   /* Executed Every Time */
-  uint8_t size = state->curve_info->size;
+  const uint8_t size = state->curve_info->size;
   const uint32_t *ord = state->curve_info->n;
 
   ec_point_t point;

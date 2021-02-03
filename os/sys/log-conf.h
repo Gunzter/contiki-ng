@@ -46,7 +46,8 @@
 #ifndef __LOG_CONF_H__
 #define __LOG_CONF_H__
 
-/* Log only the last 16 bytes of link-layer and IPv6 addresses */
+/* Log only the last 16 bytes of link-layer and IPv6 addresses (or, if)
+ * the deployment module is enabled, the node IDs */
 #ifdef LOG_CONF_WITH_COMPACT_ADDR
 #define LOG_WITH_COMPACT_ADDR LOG_CONF_WITH_COMPACT_ADDR
 #else /* LOG_CONF_WITH_COMPACT_ADDR */
@@ -80,6 +81,13 @@
 #else /* LOG_CONF_OUTPUT */
 #define LOG_OUTPUT(...) printf(__VA_ARGS__)
 #endif /* LOG_CONF_OUTPUT */
+
+/* Color the prefix based on the log level. Disabled by default */
+#ifdef LOG_CONF_WITH_COLOR
+#define LOG_WITH_COLOR LOG_CONF_WITH_COLOR
+#else /* LOG_CONF_WITH_COLOR */
+#define LOG_WITH_COLOR 0
+#endif /* LOG_CONF_WITH_COLOR */
 
 /*
  * Custom output function to prefix logs with level and module.
@@ -135,6 +143,10 @@
 
 #ifndef LOG_CONF_LEVEL_COAP
 #define LOG_CONF_LEVEL_COAP                        LOG_LEVEL_NONE
+#endif /* LOG_CONF_LEVEL_COAP */
+
+#ifndef LOG_CONF_LEVEL_SNMP
+#define LOG_CONF_LEVEL_SNMP                        LOG_LEVEL_NONE
 #endif /* LOG_CONF_LEVEL_COAP */
 
 #ifndef LOG_CONF_LEVEL_LWM2M

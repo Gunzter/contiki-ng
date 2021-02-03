@@ -39,6 +39,7 @@
  * \author
  *         Joakim Eriksson <joakime@sics.se>
  *         Niclas Finne <nfi@sics.se>
+ *         Carlos Gonzalo Peces <carlosgp143@gmail.com>
  */
 
 #include "lwm2m-engine.h"
@@ -56,22 +57,20 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
-
-#if UIP_CONF_IPV6_RPL
-#include "rpl.h"
+#ifndef LWM2M_ENGINE_CLIENT_ENDPOINT_NAME
 #include "net/ipv6/uip-ds6.h"
-#endif /* UIP_CONF_IPV6_RPL */
+#endif /* LWM2M_ENGINE_CLIENT_ENDPOINT_NAME */
 
 /* Log configuration */
 #include "coap-log.h"
-#define LOG_MODULE "lwm2m-engine"
+#define LOG_MODULE "lwm2m-eng"
 #define LOG_LEVEL  LOG_LEVEL_LWM2M
 
 #ifndef LWM2M_ENGINE_CLIENT_ENDPOINT_PREFIX
 #ifdef LWM2M_DEVICE_MODEL_NUMBER
-#define LWM2M_ENGINE_CLIENT_ENDPOINT_PREFIX LWM2M_DEVICE_MODEL_NUMBER
+#define LWM2M_ENGINE_CLIENT_ENDPOINT_PREFIX "Contiki-NG-"LWM2M_DEVICE_MODEL_NUMBER
 #else /* LWM2M_DEVICE_MODEL_NUMBER */
-#define LWM2M_ENGINE_CLIENT_ENDPOINT_PREFIX "Contiki-"
+#define LWM2M_ENGINE_CLIENT_ENDPOINT_PREFIX "Contiki-NG"
 #endif /* LWM2M_DEVICE_MODEL_NUMBER */
 #endif /* LWM2M_ENGINE_CLIENT_ENDPOINT_PREFIX */
 
@@ -81,9 +80,23 @@
 #define USE_RD_CLIENT 1
 #endif /* LWM2M_ENGINE_CONF_USE_RD_CLIENT */
 
+
+#if LWM2M_QUEUE_MODE_ENABLED
+ /* Queue Mode is handled using the RD Client and the Q-Mode object */
+#define USE_RD_CLIENT 1
+#endif
+
 #if USE_RD_CLIENT
 #include "lwm2m-rd-client.h"
 #endif
+
+#if LWM2M_QUEUE_MODE_ENABLED
+#include "lwm2m-queue-mode.h"
+#include "lwm2m-notification-queue.h"
+#if LWM2M_QUEUE_MODE_OBJECT_ENABLED
+#include "lwm2m-queue-mode-object.h"
+#endif /* LWM2M_QUEUE_MODE_OBJECT_ENABLED */
+#endif /* LWM2M_QUEUE_MODE_ENABLED */
 
 /* MACRO for getting out resource ID from resource array ID + flags */
 #define RSC_ID(x)       ((uint16_t)(x & 0xffff))
@@ -129,7 +142,6 @@ static struct {
   uint8_t token[COAP_TOKEN_LEN];
   /* in the future also a timeout */
 } created;
-
 
 COAP_HANDLER(lwm2m_handler, lwm2m_handler_callback);
 LIST(object_list);
@@ -544,6 +556,9 @@ lwm2m_engine_init(void)
 
 #endif /* LWM2M_ENGINE_CLIENT_ENDPOINT_NAME */
 
+  /* Initialize CoAP engine. Contiki-NG already does that from the main,
+   * but for standalone use of lwm2m, this is required here. coap_engine_init()
+   * checks for double-initialization and can be called twice safely. */
   coap_engine_init();
 
   /* Register the CoAP handler for lightweight object handling */
@@ -551,6 +566,10 @@ lwm2m_engine_init(void)
 
 #if USE_RD_CLIENT
   lwm2m_rd_client_init(endpoint);
+#endif
+
+#if LWM2M_QUEUE_MODE_ENABLED && LWM2M_QUEUE_MODE_OBJECT_ENABLED
+  lwm2m_queue_mode_object_init();
 #endif
 }
 /*---------------------------------------------------------------------------*/
@@ -744,7 +763,7 @@ perform_multi_resource_read_op(lwm2m_object_t *object,
             }
             /* ---------- Read operation ------------- */
           } else if(ctx->operation == LWM2M_OP_READ) {
-            lwm2m_status_t success;
+            lwm2m_status_t success = 0;
             uint8_t lv;
 
             lv = ctx->level;
@@ -768,7 +787,7 @@ perform_multi_resource_read_op(lwm2m_object_t *object,
                 /* Now we need to initialize the object writing for this new object */
                 len = ctx->writer->init_write(ctx);
                 ctx->outbuf->len += len;
-                LOG_DBG("INIT WRITE len:%d size:%d\n", len, (int) ctx->outbuf->size);
+                LOG_DBG("INIT WRITE len:%d size:%"PRIu16"\n", len, ctx->outbuf->size);
                 initialized = 1;
               }
 
@@ -1371,6 +1390,10 @@ lwm2m_handler_callback(coap_message_t *request, coap_message_t *response,
   context.inbuf->size = coap_get_payload(request, (const uint8_t **)&context.inbuf->buffer);
   context.inbuf->pos = 0;
 
+#if LWM2M_QUEUE_MODE_ENABLED 
+lwm2m_queue_mode_request_received();
+#endif /* LWM2M_QUEUE_MODE_ENABLED */
+
   /* Maybe this should be part of CoAP itself - this seems not to be working
      with the leshan server */
 #define LWM2M_CONF_ENTITY_TOO_LARGE_BLOCK1 0
@@ -1517,10 +1540,10 @@ lwm2m_handler_callback(coap_message_t *request, coap_message_t *response,
     /* for debugging */
     LOG_DBG("[");
     LOG_DBG_COAP_STRING(url, url_len);
-    LOG_DBG_("] %s Format:%d ID:%d bsize:%u offset:%d\n",
+    LOG_DBG_("] %s Format:%d ID:%d bsize:%u offset:%"PRId32"\n",
              get_method_as_string(coap_get_method_type(request)),
              format, context.object_id, buffer_size,
-             offset != NULL ? ((int)*offset) : 0);
+             offset != NULL ? *offset : 0);
     if(format == TEXT_PLAIN) {
       /* a string */
       const uint8_t *data;
@@ -1574,8 +1597,8 @@ lwm2m_handler_callback(coap_message_t *request, coap_message_t *response,
   if(success == LWM2M_STATUS_OK) {
     /* Handle blockwise 1 */
     if(coap_is_option(request, COAP_OPTION_BLOCK1)) {
-      LOG_DBG("Setting BLOCK 1 num:%d o2:%d o:%d\n", (int) bnum, (int) boffset,
-              (int) (offset != NULL ? *offset : 0));
+      LOG_DBG("Setting BLOCK 1 num:%"PRIu32" o2:%"PRIu32" o:%"PRId32"\n", bnum, boffset,
+              (offset != NULL ? *offset : 0));
       coap_set_header_block1(response, bnum, 0, bsize);
     }
 
@@ -1630,14 +1653,46 @@ lwm2m_handler_callback(coap_message_t *request, coap_message_t *response,
   return COAP_HANDLER_STATUS_PROCESSED;
 }
 /*---------------------------------------------------------------------------*/
-void lwm2m_notify_object_observers(lwm2m_object_instance_t *obj,
+static void
+lwm2m_send_notification(char* path)
+{
+#if LWM2M_QUEUE_MODE_ENABLED && LWM2M_QUEUE_MODE_INCLUDE_DYNAMIC_ADAPTATION
+    if(lwm2m_queue_mode_get_dynamic_adaptation_flag()) {
+      lwm2m_queue_mode_set_handler_from_notification();
+    } 
+#endif
+  coap_notify_observers_sub(NULL, path);
+}
+/*---------------------------------------------------------------------------*/
+void 
+lwm2m_notify_object_observers(lwm2m_object_instance_t *obj,
                                    uint16_t resource)
 {
   char path[20]; /* 60000/60000/60000 */
   if(obj != NULL) {
     snprintf(path, 20, "%d/%d/%d", obj->object_id, obj->instance_id, resource);
-    coap_notify_observers_sub(NULL, path);
   }
+
+#if LWM2M_QUEUE_MODE_ENABLED
+  
+  if(coap_has_observers(path)) {
+    /* Client is sleeping -> add the notification to the list */
+    if(!lwm2m_rd_client_is_client_awake()) {
+      lwm2m_notification_queue_add_notification_path(obj->object_id, obj->instance_id, resource);
+
+      /* if it is the first notification -> wake up and send update */
+      if(!lwm2m_queue_mode_is_waked_up_by_notification()) {
+        lwm2m_queue_mode_set_waked_up_by_notification();
+        lwm2m_rd_client_fsm_execute_queue_mode_update();
+      }
+    /* Client is awake -> send the notification */  
+    } else {
+      lwm2m_send_notification(path);
+    }
+  }
+#else 
+  lwm2m_send_notification(path);
+#endif
 }
 /*---------------------------------------------------------------------------*/
 /** @} */

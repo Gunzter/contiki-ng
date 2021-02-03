@@ -60,11 +60,14 @@
  * list with list_remove(). The head and tail of a list can be
  * extracted using list_head() and list_tail(), respectively.
  *
+ * This library is not safe to be used within an interrupt context.
  * @{
  */
 
 #ifndef LIST_H_
 #define LIST_H_
+
+#include <stdbool.h>
 
 #define LIST_CONCAT2(s1, s2) s1##s2
 #define LIST_CONCAT(s1, s2) LIST_CONCAT2(s1, s2)
@@ -141,7 +144,7 @@ void   list_push(list_t list, void *item);
 void * list_chop(list_t list);
 
 void   list_add(list_t list, void *item);
-void   list_remove(list_t list, void *item);
+bool   list_remove(list_t list, void *item);
 
 int    list_length(list_t list);
 
@@ -150,6 +153,8 @@ void   list_copy(list_t dest, list_t src);
 void   list_insert(list_t list, void *previtem, void *newitem);
 
 void * list_item_next(void *item);
+
+bool list_contains(list_t list, void *item);
 
 #endif /* LIST_H_ */
 

@@ -58,8 +58,8 @@ typedef struct  {
   struct process *process;
 
   /* Input Variables */
-  uint32_t    a[12];            /**< Left Number */
-  uint32_t    b[12];            /**< Right Number */
+  uint32_t    a[ECC_MAXIMUM_LENGTH];            /**< Left Number */
+  uint32_t    b[ECC_MAXIMUM_LENGTH];            /**< Right Number */
   uint8_t     size;             /**< Length of a and b */
 
   /* Output Variables */
@@ -80,9 +80,9 @@ typedef struct {
   struct process *process;
 
   /* Input Variables */
-  ecc_curve_info_t *curve_info; /**< Curve defining the CyclicGroup */
+  const ecc_curve_info_t *curve_info; /**< Curve defining the CyclicGroup */
   ec_point_t       point_in;    /**< Generator Point */
-  uint32_t         secret[12];  /**< Secret */
+  uint32_t         secret[ECC_MAXIMUM_LENGTH];  /**< Secret */
 
   /* Variables Holding intermediate data (initialized/used internally) */
   uint32_t         rv;          /**< Address of Next Result in PKA SRAM */
@@ -106,20 +106,20 @@ typedef struct {
   struct process *process;
 
   /* Input Variables */
-  ecc_curve_info_t *curve_info; /**< Curve defining the CyclicGroup */
-  uint32_t    secret[12];       /**< Secret Key */
-  uint32_t    k_e[12];          /**< Ephemeral Key */
-  uint32_t    hash[12];         /**< Hash to be signed */
+  const ecc_curve_info_t *curve_info; /**< Curve defining the CyclicGroup */
+  uint32_t    secret[ECC_MAXIMUM_LENGTH];       /**< Secret Key */
+  uint32_t    k_e[ECC_MAXIMUM_LENGTH];          /**< Ephemeral Key */
+  uint32_t    hash[ECC_MAXIMUM_LENGTH];         /**< Hash to be signed */
 
   /* Variables Holding intermediate data (initialized/used internally) */
   uint32_t    rv;               /**< Address of Next Result in PKA SRAM */
-  uint32_t    k_e_inv[12];      /**< Inverted ephemeral Key */
+  uint32_t    k_e_inv[ECC_MAXIMUM_LENGTH];      /**< Inverted ephemeral Key */
   uint32_t    len;              /**< Length of intermediate Result */
 
   /* Output Variables */
   uint8_t     result;           /**< Result Code */
   ec_point_t  point_r;          /**< Signature R (x coordinate) */
-  uint32_t    signature_s[24];  /**< Signature S */
+  uint32_t    signature_s[ECC_MAXIMUM_LENGTH*2];  /**< Signature S */
 } ecc_dsa_sign_state_t;
 
 /**
@@ -138,17 +138,17 @@ typedef struct {
   struct process *process;
 
   /* Input Variables */
-  ecc_curve_info_t *curve_info; /**< Curve defining the CyclicGroup */
-  uint32_t    signature_r[12];  /**< Signature R */
-  uint32_t    signature_s[12];  /**< Signature S */
-  uint32_t    hash[12];         /**< Hash to be signed */
+  const ecc_curve_info_t *curve_info; /**< Curve defining the CyclicGroup */
+  uint32_t    signature_r[ECC_MAXIMUM_LENGTH];  /**< Signature R */
+  uint32_t    signature_s[ECC_MAXIMUM_LENGTH];  /**< Signature S */
+  uint32_t    hash[ECC_MAXIMUM_LENGTH];         /**< Hash to be signed */
   ec_point_t  public;           /**< Signature R (x coordinate) */
 
   /* Variables Holding intermediate data (initialized/used internally) */
   uint32_t    rv;               /**< Address of Next Result in PKA SRAM */
-  uint32_t    s_inv[12];        /**< Inverted ephemeral Key */
-  uint32_t    u1[24];           /**< Intermediate result */
-  uint32_t    u2[24];           /**< Intermediate result */
+  uint32_t    s_inv[ECC_MAXIMUM_LENGTH];        /**< Inverted ephemeral Key */
+  uint32_t    u1[ECC_MAXIMUM_LENGTH*2];           /**< Intermediate result */
+  uint32_t    u2[ECC_MAXIMUM_LENGTH*2];           /**< Intermediate result */
   ec_point_t  p1;               /**< Intermediate result */
   ec_point_t  p2;               /**< Intermediate result */
   uint32_t    len;              /**< Length of intermediate Result */

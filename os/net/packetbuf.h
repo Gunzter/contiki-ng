@@ -55,6 +55,7 @@
 #include "contiki.h"
 #include "net/linkaddr.h"
 #include "net/mac/llsec802154.h"
+#include "net/mac/csma/csma-security.h"
 #include "net/mac/tsch/tsch-conf.h"
 
 /**
@@ -226,6 +227,7 @@ enum {
 #if TSCH_WITH_LINK_SELECTOR
   PACKETBUF_ATTR_TSCH_SLOTFRAME,
   PACKETBUF_ATTR_TSCH_TIMESLOT,
+  PACKETBUF_ATTR_TSCH_CHANNEL_OFFSET,
 #endif /* TSCH_WITH_LINK_SELECTOR */
 
   /* Scope 1 attributes: used between two neighbors only. */
@@ -236,8 +238,12 @@ enum {
 #if LLSEC802154_USES_EXPLICIT_KEYS
   PACKETBUF_ATTR_KEY_ID_MODE,
   PACKETBUF_ATTR_KEY_INDEX,
-  PACKETBUF_ATTR_KEY_SOURCE_BYTES_0_1,
 #endif /* LLSEC802154_USES_EXPLICIT_KEYS */
+
+#if LLSEC802154_USES_FRAME_COUNTER
+  PACKETBUF_ATTR_FRAME_COUNTER_BYTES_0_1,
+  PACKETBUF_ATTR_FRAME_COUNTER_BYTES_2_3,
+#endif /* LLSEC802154_USES_FRAME_COUNTER */
 
   /* Scope 2 attributes: used between end-to-end nodes. */
   /* These must be last */
@@ -277,6 +283,8 @@ void              packetbuf_attr_copyfrom(struct packetbuf_attr *attrs,
 #define PACKETBUF_ATTR_BIT  1
 #define PACKETBUF_ATTR_BYTE 8
 #define PACKETBUF_ADDRSIZE (LINKADDR_SIZE * PACKETBUF_ATTR_BYTE)
+
+#define PACKETBUF_ATTR_SECURITY_LEVEL_DEFAULT 0xffff
 
 struct packetbuf_attrlist {
   uint8_t type;

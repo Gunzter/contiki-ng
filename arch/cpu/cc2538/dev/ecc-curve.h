@@ -47,15 +47,28 @@
 #ifndef ECC_CURVE_H_
 #define ECC_CURVE_H_
 
+#include "ecc-driver.h"
+
+#if ECC_MAXIMUM_LENGTH*32 >= 384
+/*
+ * NIST P-384, X9.62 prime384v1
+ */
+extern const ecc_curve_info_t nist_p_384;
+#endif
+
+#if ECC_MAXIMUM_LENGTH*32 >= 256
 /*
  * NIST P-256, X9.62 prime256v1
  */
-ecc_curve_info_t nist_p_256;
+extern const ecc_curve_info_t nist_p_256;
+#endif
 
+#if ECC_MAXIMUM_LENGTH*32 >= 192
 /*
  * NIST P-192, X9.62 prime192v1
  */
-ecc_curve_info_t nist_p_192;
+extern const ecc_curve_info_t nist_p_192;
+#endif
 
 #endif /* CURVE_INFO_H_ */
 

@@ -74,6 +74,7 @@ watchdog_start(void)
   /* Max interval (32768), watchdog mode, enable if configured to do so */
   REG(SMWDTHROSC_WDCTL) = WATCHDOG_ENABLE;
 }
+
 /*---------------------------------------------------------------------------*/
 /**
  * \brief Writes the WDT clear sequence.

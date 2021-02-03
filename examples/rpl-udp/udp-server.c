@@ -28,8 +28,7 @@
  */
 
 #include "contiki.h"
-#include "rpl.h"
-#include "rpl-dag-root.h"
+#include "net/routing/routing.h"
 #include "net/netstack.h"
 #include "net/ipv6/simple-udp.h"
 
@@ -55,15 +54,13 @@ udp_rx_callback(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-  unsigned count = *(unsigned *)data;
-  LOG_INFO("Received request %u from ", count);
+  LOG_INFO("Received request '%.*s' from ", datalen, (char *) data);
   LOG_INFO_6ADDR(sender_addr);
   LOG_INFO_("\n");
 #if WITH_SERVER_REPLY
-  LOG_INFO("Sending response %u to ", count);
-  LOG_INFO_6ADDR(sender_addr);
-  LOG_INFO_("\n");
-  simple_udp_sendto(&udp_conn, &count, sizeof(count), sender_addr);
+  /* send back the same string to the client as an echo reply */
+  LOG_INFO("Sending response.\n");
+  simple_udp_sendto(&udp_conn, data, datalen, sender_addr);
 #endif /* WITH_SERVER_REPLY */
 }
 /*---------------------------------------------------------------------------*/
@@ -72,7 +69,7 @@ PROCESS_THREAD(udp_server_process, ev, data)
   PROCESS_BEGIN();
 
   /* Initialize DAG root */
-  rpl_dag_root_init_dag_immediately();
+  NETSTACK_ROUTING.root_start();
 
   /* Initialize UDP connection */
   simple_udp_register(&udp_conn, UDP_SERVER_PORT, NULL,

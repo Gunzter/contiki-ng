@@ -42,5 +42,7 @@
 #if BORDER_ROUTER_CONF_WEBSERVER
 #define UIP_CONF_TCP 1
 #endif
+//force 2.4GHz/sub-GHz operation
+#define RF_CONF_MODE RF_MODE_2_4_GHZ//RF_MODE_SUB_1_GHZ
 
 #endif /* PROJECT_CONF_H_ */

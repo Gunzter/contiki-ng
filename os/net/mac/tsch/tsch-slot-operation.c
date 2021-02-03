@@ -52,17 +52,7 @@
 #include "net/queuebuf.h"
 #include "net/mac/framer/framer-802154.h"
 #include "net/mac/tsch/tsch.h"
-#include "net/mac/tsch/tsch-slot-operation.h"
-#include "net/mac/tsch/tsch-queue.h"
-#include "net/mac/tsch/tsch-private.h"
-#include "net/mac/tsch/tsch-log.h"
-#include "net/mac/tsch/tsch-packet.h"
-#include "net/mac/tsch/tsch-security.h"
-#include "net/mac/tsch/tsch-adaptive-timesync.h"
-#if CONTIKI_TARGET_COOJA || CONTIKI_TARGET_COOJA_IP64
-#include "lib/simEnvChange.h"
-#include "sys/cooja_mt.h"
-#endif /* CONTIKI_TARGET_COOJA || CONTIKI_TARGET_COOJA_IP64 */
+#include "sys/critical.h"
 
 #include "sys/log.h"
 /* TSCH debug macros, i.e. to set LEDs or GPIOs on various TSCH
@@ -101,13 +91,13 @@
 
 /* Truncate received drift correction information to maximum half
  * of the guard time (one fourth of TSCH_DEFAULT_TS_RX_WAIT) */
-#define SYNC_IE_BOUND ((int32_t)US_TO_RTIMERTICKS(TSCH_DEFAULT_TS_RX_WAIT / 4))
+#define SYNC_IE_BOUND ((int32_t)US_TO_RTIMERTICKS(tsch_timing_us[tsch_ts_rx_wait] / 4))
 
 /* By default: check that rtimer runs at >=32kHz and use a guard time of 10us */
 #if RTIMER_SECOND < (32 * 1024)
 #error "TSCH: RTIMER_SECOND < (32 * 1024)"
 #endif
-#if CONTIKI_TARGET_COOJA || CONTIKI_TARGET_COOJA_IP64
+#if CONTIKI_TARGET_COOJA
 /* Use 0 usec guard time for Cooja Mote with a 1 MHz Rtimer*/
 #define RTIMER_GUARD 0u
 #elif RTIMER_SECOND >= 200000
@@ -137,9 +127,10 @@ struct tsch_packet *dequeued_array[TSCH_DEQUEUED_ARRAY_SIZE];
 struct ringbufindex input_ringbuf;
 struct input_packet input_array[TSCH_MAX_INCOMING_PACKETS];
 
+/* Updates and reads of the next two variables must be atomic (i.e. both together) */
 /* Last time we received Sync-IE (ACK or data packet from a time source) */
 static struct tsch_asn_t last_sync_asn;
-clock_time_t last_sync_time; /* Same info, in clock_time_t units */
+clock_time_t tsch_last_sync_time; /* Same info, in clock_time_t units */
 
 /* A global lock for manipulating data structures safely from outside of interrupt */
 static volatile int tsch_locked = 0;
@@ -152,17 +143,15 @@ static int32_t drift_correction = 0;
 /* Is drift correction used? (Can be true even if drift_correction == 0) */
 static uint8_t is_drift_correction_used;
 
-/* The neighbor last used as our time source */
-struct tsch_neighbor *last_timesource_neighbor = NULL;
-
 /* Used from tsch_slot_operation and sub-protothreads */
 static rtimer_clock_t volatile current_slot_start;
 
 /* Are we currently inside a slot? */
 static volatile int tsch_in_slot_operation = 0;
 
-/* If we are inside a slot, this tells the current channel */
-static uint8_t current_channel;
+/* If we are inside a slot, these tell the current channel and channel offset */
+uint8_t tsch_current_channel;
+uint8_t tsch_current_channel_offset;
 
 /* Info about the link, packet and neighbor of
  * the current (or next) slot */
@@ -173,6 +162,11 @@ struct tsch_link *current_link = NULL;
 static struct tsch_link *backup_link = NULL;
 static struct tsch_packet *current_packet = NULL;
 static struct tsch_neighbor *current_neighbor = NULL;
+
+/* Indicates whether an extra link is needed to handle the current burst */
+static int burst_link_scheduled = 0;
+/* Counts the length of the current burst */
+int tsch_current_burst_count = 0;
 
 /* Protothread for association */
 PT_THREAD(tsch_scan(struct pt *pt));
@@ -208,10 +202,7 @@ tsch_get_lock(void)
       busy_wait = 1;
       busy_wait_time = RTIMER_NOW();
       while(tsch_in_slot_operation) {
-#if CONTIKI_TARGET_COOJA || CONTIKI_TARGET_COOJA_IP64
-        simProcessRunValue = 1;
-        cooja_mt_yield();
-#endif /* CONTIKI_TARGET_COOJA || CONTIKI_TARGET_COOJA_IP64 */
+        watchdog_periodic();
       }
       busy_wait_time = RTIMER_NOW() - busy_wait_time;
     }
@@ -246,12 +237,36 @@ tsch_release_lock(void)
 /*---------------------------------------------------------------------------*/
 /* Channel hopping utility functions */
 
-/* Return channel from ASN and channel offset */
-uint8_t
-tsch_calculate_channel(struct tsch_asn_t *asn, uint8_t channel_offset)
+/* Return the channel offset to use for the current slot */
+static uint8_t
+tsch_get_channel_offset(struct tsch_link *link, struct tsch_packet *p)
 {
-  uint16_t index_of_0 = TSCH_ASN_MOD(*asn, tsch_hopping_sequence_length);
-  uint16_t index_of_offset = (index_of_0 + channel_offset) % tsch_hopping_sequence_length.val;
+#if TSCH_WITH_LINK_SELECTOR
+  if(p != NULL) {
+    uint16_t packet_channel_offset = queuebuf_attr(p->qb, PACKETBUF_ATTR_TSCH_CHANNEL_OFFSET);
+    if(packet_channel_offset != 0xffff) {
+      /* The schedule specifies a channel offset for this one; use it */
+      return packet_channel_offset;
+    }
+  }
+#endif
+  return link->channel_offset;
+}
+
+/**
+ * Returns a 802.15.4 channel from an ASN and channel offset. Basically adds
+ * The offset to the ASN and performs a hopping sequence lookup.
+ *
+ * \param asn A given ASN
+ * \param channel_offset Given channel offset
+ * \return The resulting channel
+ */
+static uint8_t
+tsch_calculate_channel(struct tsch_asn_t *asn, uint16_t channel_offset)
+{
+  uint16_t index_of_0, index_of_offset;
+  index_of_0 = TSCH_ASN_MOD(*asn, tsch_hopping_sequence_length);
+  index_of_offset = (index_of_0 + channel_offset) % tsch_hopping_sequence_length.val;
   return tsch_hopping_sequence[index_of_offset];
 }
 
@@ -297,15 +312,16 @@ tsch_schedule_slot_operation(struct rtimer *tm, rtimer_clock_t ref_time, rtimer_
                     "!dl-miss %s %d %d",
                         str, (int)(now-ref_time), (int)offset);
     );
+  } else {
+    r = rtimer_set(tm, ref_time + offset, 1, (void (*)(struct rtimer *, void *))tsch_slot_operation, NULL);
+    if(r == RTIMER_OK) {
+      return 1;
+    }
+  }
 
-    return 0;
-  }
-  ref_time += offset;
-  r = rtimer_set(tm, ref_time, 1, (void (*)(struct rtimer *, void *))tsch_slot_operation, NULL);
-  if(r != RTIMER_OK) {
-    return 0;
-  }
-  return 1;
+  /* block until the time to schedule comes */
+  RTIMER_BUSYWAIT_UNTIL_ABS(0, ref_time, offset);
+  return 0;
 }
 /*---------------------------------------------------------------------------*/
 /* Schedule slot operation conditionally, and YIELD if success only.
@@ -315,8 +331,8 @@ tsch_schedule_slot_operation(struct rtimer *tm, rtimer_clock_t ref_time, rtimer_
   do { \
     if(tsch_schedule_slot_operation(tm, ref_time, offset - RTIMER_GUARD, str)) { \
       PT_YIELD(pt); \
+      RTIMER_BUSYWAIT_UNTIL_ABS(0, ref_time, offset); \
     } \
-    BUSYWAIT_UNTIL_ABS(0, ref_time, offset); \
   } while(0);
 /*---------------------------------------------------------------------------*/
 /* Get EB, broadcast or unicast packet to be sent, and target neighbor. */
@@ -353,6 +369,44 @@ get_packet_and_neighbor_for_link(struct tsch_link *link, struct tsch_neighbor **
   }
 
   return p;
+}
+/*---------------------------------------------------------------------------*/
+static
+void update_link_backoff(struct tsch_link *link) {
+  if(link != NULL
+      && (link->link_options & LINK_OPTION_TX)
+      && (link->link_options & LINK_OPTION_SHARED)) {
+    /* Decrement the backoff window for all neighbors able to transmit over
+     * this Tx, Shared link. */
+    tsch_queue_update_all_backoff_windows(&link->addr);
+  }
+}
+/*---------------------------------------------------------------------------*/
+uint64_t
+tsch_get_network_uptime_ticks(void)
+{
+  uint64_t uptime_asn;
+  uint64_t uptime_ticks;
+  int_master_status_t status;
+
+  if(!tsch_is_associated) {
+    /* not associated, network uptime is not known */
+    return (uint64_t)-1;
+  }
+
+  status = critical_enter();
+
+  uptime_asn = last_sync_asn.ls4b + ((uint64_t)last_sync_asn.ms1b << 32);
+  /* first calculate the at the uptime at the last sync in rtimer ticks */
+  uptime_ticks = uptime_asn * tsch_timing[tsch_ts_timeslot_length];
+  /* then convert to clock ticks (assume that CLOCK_SECOND divides RTIMER_ARCH_SECOND) */
+  uptime_ticks /= (RTIMER_ARCH_SECOND / CLOCK_SECOND);
+  /* then add the ticks passed since the last timesync */
+  uptime_ticks += (clock_time() - tsch_last_sync_time);
+
+  critical_exit(status);
+
+  return uptime_ticks;
 }
 /*---------------------------------------------------------------------------*/
 /**
@@ -459,19 +513,29 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
       static uint8_t packet_len;
       /* packet seqno */
       static uint8_t seqno;
-      /* is this a broadcast packet? (wait for ack?) */
-      static uint8_t is_broadcast;
+      /* wait for ack? */
+      static uint8_t do_wait_for_ack;
       static rtimer_clock_t tx_start_time;
+      /* Did we set the frame pending bit to request an extra burst link? */
+      static int burst_link_requested;
 
-#if CCA_ENABLED
+#if TSCH_CCA_ENABLED
       static uint8_t cca_status;
-#endif
+#endif /* TSCH_CCA_ENABLED */
 
       /* get payload */
       packet = queuebuf_dataptr(current_packet->qb);
       packet_len = queuebuf_datalen(current_packet->qb);
-      /* is this a broadcast packet? (wait for ack?) */
-      is_broadcast = current_neighbor->is_broadcast;
+      /* if is this a broadcast packet, don't wait for ack */
+      do_wait_for_ack = !current_neighbor->is_broadcast;
+      /* Unicast. More packets in queue for the neighbor? */
+      burst_link_requested = 0;
+      if(do_wait_for_ack
+             && tsch_current_burst_count + 1 < TSCH_BURST_MAX_LEN
+             && tsch_queue_nbr_packet_count(current_neighbor) > 1) {
+        burst_link_requested = 1;
+        tsch_packet_set_frame_pending(packet, packet_len);
+      }
       /* read seqno from payload */
       seqno = ((uint8_t *)(packet))[2];
       /* if this is an EB, then update its Sync-IE */
@@ -498,22 +562,22 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
       if(packet_ready && NETSTACK_RADIO.prepare(packet, packet_len) == 0) { /* 0 means success */
         static rtimer_clock_t tx_duration;
 
-#if CCA_ENABLED
+#if TSCH_CCA_ENABLED
         cca_status = 1;
         /* delay before CCA */
-        TSCH_SCHEDULE_AND_YIELD(pt, t, current_slot_start, TS_CCA_OFFSET, "cca");
+        TSCH_SCHEDULE_AND_YIELD(pt, t, current_slot_start, tsch_timing[tsch_ts_cca_offset], "cca");
         TSCH_DEBUG_TX_EVENT();
         tsch_radio_on(TSCH_RADIO_CMD_ON_WITHIN_TIMESLOT);
         /* CCA */
-        BUSYWAIT_UNTIL_ABS(!(cca_status |= NETSTACK_RADIO.channel_clear()),
-                           current_slot_start, TS_CCA_OFFSET + TS_CCA);
+        RTIMER_BUSYWAIT_UNTIL_ABS(!(cca_status &= NETSTACK_RADIO.channel_clear()),
+                           current_slot_start, tsch_timing[tsch_ts_cca_offset] + tsch_timing[tsch_ts_cca]);
         TSCH_DEBUG_TX_EVENT();
         /* there is not enough time to turn radio off */
         /*  NETSTACK_RADIO.off(); */
         if(cca_status == 0) {
           mac_tx_status = MAC_TX_COLLISION;
         } else
-#endif /* CCA_ENABLED */
+#endif /* TSCH_CCA_ENABLED */
         {
           /* delay before TX */
           TSCH_SCHEDULE_AND_YIELD(pt, t, current_slot_start, tsch_timing[tsch_ts_tx_offset] - RADIO_DELAY_BEFORE_TX, "TxBeforeTx");
@@ -531,7 +595,7 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
           tsch_radio_off(TSCH_RADIO_CMD_OFF_WITHIN_TIMESLOT);
 
           if(mac_tx_status == RADIO_TX_OK) {
-            if(!is_broadcast) {
+            if(do_wait_for_ack) {
               uint8_t ackbuf[TSCH_PACKET_MAX_LEN];
               int ack_len;
               rtimer_clock_t ack_start_time;
@@ -552,14 +616,14 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
               TSCH_DEBUG_TX_EVENT();
               tsch_radio_on(TSCH_RADIO_CMD_ON_WITHIN_TIMESLOT);
               /* Wait for ACK to come */
-              BUSYWAIT_UNTIL_ABS(NETSTACK_RADIO.receiving_packet(),
+              RTIMER_BUSYWAIT_UNTIL_ABS(NETSTACK_RADIO.receiving_packet(),
                   tx_start_time, tx_duration + tsch_timing[tsch_ts_rx_ack_delay] + tsch_timing[tsch_ts_ack_wait] + RADIO_DELAY_BEFORE_DETECT);
               TSCH_DEBUG_TX_EVENT();
 
               ack_start_time = RTIMER_NOW() - RADIO_DELAY_BEFORE_DETECT;
 
               /* Wait for ACK to finish */
-              BUSYWAIT_UNTIL_ABS(!NETSTACK_RADIO.receiving_packet(),
+              RTIMER_BUSYWAIT_UNTIL_ABS(!NETSTACK_RADIO.receiving_packet(),
                                  ack_start_time, tsch_timing[tsch_ts_max_ack]);
               TSCH_DEBUG_TX_EVENT();
               tsch_radio_off(TSCH_RADIO_CMD_OFF_WITHIN_TIMESLOT);
@@ -585,7 +649,7 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
 #if LLSEC802154_ENABLED
                 if(ack_len != 0) {
                   if(!tsch_security_parse_frame(ackbuf, ack_hdrlen, ack_len - ack_hdrlen - tsch_security_mic_len(&frame),
-                      &frame, &current_neighbor->addr, &tsch_current_asn)) {
+                      &frame, tsch_queue_get_nbr_address(current_neighbor), &tsch_current_asn)) {
                     TSCH_LOG_ADD(tsch_log_message,
                         snprintf(log->message, sizeof(log->message),
                         "!failed to authenticate ACK"));
@@ -616,14 +680,21 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
                             "!truncated dr %d %d", (int)eack_time_correction, (int)drift_correction);
                     );
                   }
+                  tsch_stats_on_time_synchronization(eack_time_correction);
                   is_drift_correction_used = 1;
                   tsch_timesync_update(current_neighbor, since_last_timesync, drift_correction);
                   /* Keep track of sync time */
                   last_sync_asn = tsch_current_asn;
-                  last_sync_time = clock_time();
-                  tsch_schedule_keepalive();
+                  tsch_last_sync_time = clock_time();
+                  tsch_schedule_keepalive(0);
                 }
                 mac_tx_status = MAC_TX_OK;
+
+                /* We requested an extra slot and got an ack. This means
+                the extra slot will be scheduled at the received */
+                if(burst_link_requested) {
+                  burst_link_scheduled = 1;
+                }
               } else {
                 mac_tx_status = MAC_TX_NOACK;
               }
@@ -634,6 +705,8 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
             mac_tx_status = MAC_TX_ERR;
           }
         }
+      } else {
+        mac_tx_status = MAC_TX_ERR;
       }
     }
 
@@ -649,6 +722,11 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
     if(in_queue == 0) {
       dequeued_array[dequeued_index] = current_packet;
       ringbufindex_put(&dequeued_ringbuf);
+    }
+
+    /* If this is an unicast packet to timesource, update stats */
+    if(current_neighbor != NULL && current_neighbor->is_time_source) {
+      tsch_stats_tx_packet(current_neighbor, mac_tx_status, tsch_current_channel);
     }
 
     /* Log every tx attempt */
@@ -727,7 +805,7 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
     packet_seen = NETSTACK_RADIO.receiving_packet() || NETSTACK_RADIO.pending_packet();
     if(!packet_seen) {
       /* Check if receiving within guard time */
-      BUSYWAIT_UNTIL_ABS((packet_seen = NETSTACK_RADIO.receiving_packet()),
+      RTIMER_BUSYWAIT_UNTIL_ABS((packet_seen = (NETSTACK_RADIO.receiving_packet() || NETSTACK_RADIO.pending_packet())),
           current_slot_start, tsch_timing[tsch_ts_rx_offset] + tsch_timing[tsch_ts_rx_wait] + RADIO_DELAY_BEFORE_DETECT);
     }
     if(!packet_seen) {
@@ -739,7 +817,7 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
       rx_start_time = RTIMER_NOW() - RADIO_DELAY_BEFORE_DETECT;
 
       /* Wait until packet is received, turn radio off */
-      BUSYWAIT_UNTIL_ABS(!NETSTACK_RADIO.receiving_packet(),
+      RTIMER_BUSYWAIT_UNTIL_ABS(!NETSTACK_RADIO.receiving_packet(),
           current_slot_start, tsch_timing[tsch_ts_rx_offset] + tsch_timing[tsch_ts_rx_wait] + tsch_timing[tsch_ts_max_tx]);
       TSCH_DEBUG_RX_EVENT();
       tsch_radio_off(TSCH_RADIO_CMD_OFF_WITHIN_TIMESLOT);
@@ -749,13 +827,14 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
         static int header_len;
         static frame802154_t frame;
         radio_value_t radio_last_rssi;
+        radio_value_t radio_last_lqi;
 
         /* Read packet */
         current_input->len = NETSTACK_RADIO.read((void *)current_input->payload, TSCH_PACKET_MAX_LEN);
         NETSTACK_RADIO.get_value(RADIO_PARAM_LAST_RSSI, &radio_last_rssi);
         current_input->rx_asn = tsch_current_asn;
         current_input->rssi = (signed)radio_last_rssi;
-        current_input->channel = current_channel;
+        current_input->channel = tsch_current_channel;
         header_len = frame802154_parse((uint8_t *)current_input->payload, current_input->len, &frame);
         frame_valid = header_len > 0 &&
           frame802154_check_dest_panid(&frame) &&
@@ -767,6 +846,8 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
 #endif
 
         packet_duration = TSCH_PACKET_DURATION(current_input->len);
+        /* limit packet_duration to its max value */
+        packet_duration = MIN(packet_duration, tsch_timing[tsch_ts_max_tx]);
 
         if(!frame_valid) {
           TSCH_LOG_ADD(tsch_log_message,
@@ -801,11 +882,16 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
 #endif /* LLSEC802154_ENABLED */
 
         if(frame_valid) {
-          if(linkaddr_cmp(&destination_address, &linkaddr_node_addr)
-             || linkaddr_cmp(&destination_address, &linkaddr_null)) {
+          /* Check that frome is for us or broadcast, AND that it is not from
+           * ourselves. This is for consistency with CSMA and to avoid adding
+           * ourselves to neighbor tables in case frames are being replayed. */
+          if((linkaddr_cmp(&destination_address, &linkaddr_node_addr)
+               || linkaddr_cmp(&destination_address, &linkaddr_null))
+             && !linkaddr_cmp(&source_address, &linkaddr_node_addr)) {
             int do_nack = 0;
             rx_count++;
             estimated_drift = RTIMER_CLOCK_DIFF(expected_rx_time, rx_start_time);
+            tsch_stats_on_time_synchronization(estimated_drift);
 
 #if TSCH_TIMESYNC_REMOVE_JITTER
             /* remove jitter due to measurement errors */
@@ -850,6 +936,9 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
                 TSCH_DEBUG_RX_EVENT();
                 NETSTACK_RADIO.transmit(ack_len);
                 tsch_radio_off(TSCH_RADIO_CMD_OFF_WITHIN_TIMESLOT);
+
+                /* Schedule a burst link iff the frame pending bit was set */
+                burst_link_scheduled = tsch_packet_get_frame_pending(current_input->payload, current_input->len);
               }
             }
 
@@ -859,17 +948,23 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
               int32_t since_last_timesync = TSCH_ASN_DIFF(tsch_current_asn, last_sync_asn);
               /* Keep track of last sync time */
               last_sync_asn = tsch_current_asn;
-              last_sync_time = clock_time();
+              tsch_last_sync_time = clock_time();
               /* Save estimated drift */
               drift_correction = -estimated_drift;
               is_drift_correction_used = 1;
               sync_count++;
               tsch_timesync_update(n, since_last_timesync, -estimated_drift);
-              tsch_schedule_keepalive();
+              tsch_schedule_keepalive(0);
             }
 
             /* Add current input to ringbuf */
             ringbufindex_put(&input_ringbuf);
+
+            /* If the neighbor is known, update its stats */
+            if(n != NULL) {
+              NETSTACK_RADIO.get_value(RADIO_PARAM_LAST_LINK_QUALITY, &radio_last_lqi);
+              tsch_stats_rx_packet(n, current_input->rssi, radio_last_lqi, tsch_current_channel);
+            }
 
             /* Log every reception */
             TSCH_LOG_ADD(tsch_log_rx,
@@ -933,22 +1028,44 @@ PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
       int is_active_slot;
       TSCH_DEBUG_SLOT_START();
       tsch_in_slot_operation = 1;
+      /* Measure on-air noise level while TSCH is idle */
+      tsch_stats_sample_rssi();
       /* Reset drift correction */
       drift_correction = 0;
       is_drift_correction_used = 0;
       /* Get a packet ready to be sent */
       current_packet = get_packet_and_neighbor_for_link(current_link, &current_neighbor);
-      /* There is no packet to send, and this link does not have Rx flag. Instead of doing
-       * nothing, switch to the backup link (has Rx flag) if any. */
-      if(current_packet == NULL && !(current_link->link_options & LINK_OPTION_RX) && backup_link != NULL) {
+      uint8_t do_skip_best_link = 0;
+      if(current_packet == NULL && backup_link != NULL) {
+        /* There is no packet to send, and this link does not have Rx flag. Instead of doing
+         * nothing, switch to the backup link (has Rx flag) if any
+         * and if the current link cannot Rx or both links can Rx, but the backup link has priority. */
+        if(!(current_link->link_options & LINK_OPTION_RX)
+            || backup_link->slotframe_handle < current_link->slotframe_handle) {
+          do_skip_best_link = 1;
+        }
+      }
+
+      if(do_skip_best_link) {
+        /* skipped a Tx link, refresh its backoff */
+        update_link_backoff(current_link);
+
         current_link = backup_link;
         current_packet = get_packet_and_neighbor_for_link(current_link, &current_neighbor);
       }
       is_active_slot = current_packet != NULL || (current_link->link_options & LINK_OPTION_RX);
       if(is_active_slot) {
-        /* Hop channel */
-        current_channel = tsch_calculate_channel(&tsch_current_asn, current_link->channel_offset);
-        NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, current_channel);
+        /* If we are in a burst, we stick to current channel instead of
+         * doing channel hopping, as per IEEE 802.15.4-2015 */
+        if(burst_link_scheduled) {
+          /* Reset burst_link_scheduled flag. Will be set again if burst continue. */
+          burst_link_scheduled = 0;
+        } else {
+          /* Hop channel */
+          tsch_current_channel_offset = tsch_get_channel_offset(current_link, current_packet);
+          tsch_current_channel = tsch_calculate_channel(&tsch_current_asn, tsch_current_channel_offset);
+        }
+        NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, tsch_current_channel);
         /* Turn the radio on already here if configured so; necessary for radios with slow startup */
         tsch_radio_on(TSCH_RADIO_CMD_ON_START_OF_TIMESLOT);
         /* Decide whether it is a TX/RX/IDLE or OFF slot */
@@ -966,11 +1083,22 @@ PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
           static struct pt slot_rx_pt;
           PT_SPAWN(&slot_operation_pt, &slot_rx_pt, tsch_rx_slot(&slot_rx_pt, t));
         }
+      } else {
+        /* Make sure to end the burst in cast, for some reason, we were
+         * in a burst but now without any more packet to send. */
+        burst_link_scheduled = 0;
       }
       TSCH_DEBUG_SLOT_END();
     }
 
     /* End of slot operation, schedule next slot or resynchronize */
+
+    if(tsch_is_coordinator) {
+      /* Update the `last_sync_*` variables to avoid large errors
+       * in the application-level time synchronization */
+      last_sync_asn = tsch_current_asn;
+      tsch_last_sync_time = clock_time();
+    }
 
     /* Do we need to resynchronize? i.e., wait for EB again */
     if(!tsch_is_coordinator && (TSCH_ASN_DIFF(tsch_current_asn, last_sync_asn) >
@@ -980,7 +1108,6 @@ PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
                 "! leaving the network, last sync %u",
                           (unsigned)TSCH_ASN_DIFF(tsch_current_asn, last_sync_asn));
       );
-      last_timesource_neighbor = NULL;
       tsch_disassociate();
     } else {
       /* backup of drift correction for printing debug messages */
@@ -991,31 +1118,39 @@ PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
       rtimer_clock_t time_to_next_active_slot;
       /* Schedule next wakeup skipping slots if missed deadline */
       do {
-        if(current_link != NULL
-            && current_link->link_options & LINK_OPTION_TX
-            && current_link->link_options & LINK_OPTION_SHARED) {
-          /* Decrement the backoff window for all neighbors able to transmit over
-           * this Tx, Shared link. */
-          tsch_queue_update_all_backoff_windows(&current_link->addr);
+        update_link_backoff(current_link);
+
+        /* A burst link was scheduled. Replay the current link at the
+        next time offset */
+        if(burst_link_scheduled && current_link != NULL) {
+          timeslot_diff = 1;
+          backup_link = NULL;
+          /* Keep track of the number of repetitions */
+          tsch_current_burst_count++;
+        } else {
+          /* Get next active link */
+          current_link = tsch_schedule_get_next_active_link(&tsch_current_asn, &timeslot_diff, &backup_link);
+          if(current_link == NULL) {
+            /* There is no next link. Fall back to default
+             * behavior: wake up at the next slot. */
+            timeslot_diff = 1;
+          } else {
+            /* Reset burst index now that the link was scheduled from
+              normal schedule (as opposed to from ongoing burst) */
+            tsch_current_burst_count = 0;
+          }
         }
 
-        /* Get next active link */
-        current_link = tsch_schedule_get_next_active_link(&tsch_current_asn, &timeslot_diff, &backup_link);
-        if(current_link == NULL) {
-          /* There is no next link. Fall back to default
-           * behavior: wake up at the next slot. */
-          timeslot_diff = 1;
-        }
         /* Update ASN */
         TSCH_ASN_INC(tsch_current_asn, timeslot_diff);
         /* Time to next wake up */
         time_to_next_active_slot = timeslot_diff * tsch_timing[tsch_ts_timeslot_length] + drift_correction;
+        time_to_next_active_slot += tsch_timesync_adaptive_compensate(time_to_next_active_slot);
         drift_correction = 0;
         is_drift_correction_used = 0;
         /* Update current slot start */
         prev_slot_start = current_slot_start;
         current_slot_start += time_to_next_active_slot;
-        current_slot_start += tsch_timesync_adaptive_compensate(time_to_next_active_slot);
       } while(!tsch_schedule_slot_operation(t, prev_slot_start, time_to_next_active_slot, "main"));
     }
 
@@ -1048,6 +1183,8 @@ tsch_slot_operation_start(void)
     TSCH_ASN_INC(tsch_current_asn, timeslot_diff);
     /* Time to next wake up */
     time_to_next_active_slot = timeslot_diff * tsch_timing[tsch_ts_timeslot_length];
+    /* Compensate for the base drift */
+    time_to_next_active_slot += tsch_timesync_adaptive_compensate(time_to_next_active_slot);
     /* Update current slot start */
     prev_slot_start = current_slot_start;
     current_slot_start += time_to_next_active_slot;
@@ -1059,10 +1196,14 @@ void
 tsch_slot_operation_sync(rtimer_clock_t next_slot_start,
     struct tsch_asn_t *next_slot_asn)
 {
+  int_master_status_t status;
+
   current_slot_start = next_slot_start;
   tsch_current_asn = *next_slot_asn;
+  status = critical_enter();
   last_sync_asn = tsch_current_asn;
-  last_sync_time = clock_time();
+  tsch_last_sync_time = clock_time();
+  critical_exit(status);
   current_link = NULL;
 }
 /*---------------------------------------------------------------------------*/

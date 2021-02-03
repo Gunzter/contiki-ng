@@ -47,13 +47,15 @@
 #include "net/ipv6/multicast/uip-mcast6-route.h"
 #include "net/ipv6/multicast/uip-mcast6-stats.h"
 #include "net/ipv6/multicast/smrf.h"
-#if UIP_CONF_IPV6_RPL_LITE == 1
-#include "net/rpl-lite/rpl.h"
-#else /* UIP_CONF_IPV6_RPL_LITE == 1 */
-#include "net/rpl-classic/rpl.h"
-#endif /* UIP_CONF_IPV6_RPL_LITE == 1 */
+#include "net/routing/routing.h"
 #include "net/netstack.h"
 #include "net/packetbuf.h"
+#if ROUTING_CONF_RPL_LITE
+#include "net/routing/rpl-lite/rpl.h"
+#endif /* ROUTING_CONF_RPL_LITE */
+#if ROUTING_CONF_RPL_CLASSIC
+#include "net/routing/rpl-classic/rpl.h"
+#endif /* ROUTING_CONF_RPL_CLASSIC */
 #include <string.h>
 
 #define DEBUG DEBUG_NONE
@@ -75,18 +77,14 @@ static uip_buf_t mcast_buf;
 static uint8_t fwd_delay;
 static uint8_t fwd_spread;
 /*---------------------------------------------------------------------------*/
-/* uIPv6 Pointers */
-/*---------------------------------------------------------------------------*/
-#define UIP_IP_BUF        ((struct uip_ip_hdr *)&uip_buf[UIP_LLH_LEN])
-/*---------------------------------------------------------------------------*/
 static void
 mcast_fwd(void *p)
 {
-  memcpy(&uip_buf[UIP_LLH_LEN], &mcast_buf, mcast_len);
+  memcpy(uip_buf, &mcast_buf, mcast_len);
   uip_len = mcast_len;
   UIP_IP_BUF->ttl--;
   tcpip_output(NULL);
-  uip_clear_buf();
+  uipbuf_clear();
 }
 /*---------------------------------------------------------------------------*/
 static uint8_t
@@ -176,7 +174,7 @@ in()
         fwd_delay = fwd_delay * (1 + ((random_rand() >> 11) % fwd_spread));
       }
 
-      memcpy(&mcast_buf, &uip_buf[UIP_LLH_LEN], uip_len);
+      memcpy(&mcast_buf, uip_buf, uip_len);
       mcast_len = uip_len;
       ctimer_set(&mcast_periodic, fwd_delay, mcast_fwd, NULL);
     }
